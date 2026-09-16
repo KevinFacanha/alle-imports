@@ -13,6 +13,18 @@ enum Marketplace {
   SHOPEE
 }
 
+enum MarketplaceOrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  PARTIALLY_REFUNDED
+  REFUNDED
+  UNKNOWN
+}
+
 model Product {
   id           String                   @id @default(uuid()) @db.Uuid
   sku          String                   @unique(map: "products_sku_key")
@@ -21,6 +33,7 @@ model Product {
   createdAt    DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
   listingItems MarketplaceListingItem[]
+  orderItems   MarketplaceOrderItem[]
 
   @@map("products")
 }
@@ -34,6 +47,7 @@ model MarketplaceAccount {
   createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   listings          MarketplaceListing[]
+  orders            MarketplaceOrder[]
 
   @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
   @@map("marketplace_accounts")
@@ -56,21 +70,69 @@ model MarketplaceListing {
 }
 
 model MarketplaceListingItem {
-  id                   String             @id @default(uuid()) @db.Uuid
-  marketplaceListingId String             @map("marketplace_listing_id") @db.Uuid
-  productId            String?            @map("product_id") @db.Uuid
-  externalSellableId   String             @map("external_sellable_id")
-  sellerSku            String?            @map("seller_sku")
-  variationLabel       String?            @map("variation_label")
-  active               Boolean            @default(true)
-  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  marketplaceListing   MarketplaceListing @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
-  product              Product?           @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
+  id                   String                 @id @default(uuid()) @db.Uuid
+  marketplaceListingId String                 @map("marketplace_listing_id") @db.Uuid
+  productId            String?                @map("product_id") @db.Uuid
+  externalSellableId   String                 @map("external_sellable_id")
+  sellerSku            String?                @map("seller_sku")
+  variationLabel       String?                @map("variation_label")
+  active               Boolean                @default(true)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceListing   MarketplaceListing     @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
+  product              Product?               @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
+  orderItems           MarketplaceOrderItem[]
 
   @@unique([marketplaceListingId, externalSellableId], map: "marketplace_listing_items_listing_external_sellable_id_key")
   @@index([marketplaceListingId], map: "marketplace_listing_items_marketplace_listing_id_idx")
   @@index([productId], map: "marketplace_listing_items_product_id_idx")
   @@index([sellerSku], map: "marketplace_listing_items_seller_sku_idx")
   @@map("marketplace_listing_items")
+}
+
+model MarketplaceOrder {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  marketplaceAccountId String                 @map("marketplace_account_id") @db.Uuid
+  externalOrderId      String                 @map("external_order_id")
+  normalizedStatus     MarketplaceOrderStatus @map("normalized_status")
+  rawStatus            String?                @map("raw_status")
+  soldAt               DateTime               @map("sold_at") @db.Timestamptz(3)
+  cancelledAt          DateTime?              @map("cancelled_at") @db.Timestamptz(3)
+  currency             String                 @default("BRL")
+  grossAmount          Decimal                @map("gross_amount") @db.Decimal(14, 2)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccount   MarketplaceAccount     @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_orders_marketplace_account_id_fkey")
+  items                MarketplaceOrderItem[]
+
+  @@unique([marketplaceAccountId, externalOrderId], map: "marketplace_orders_account_external_order_id_key")
+  @@index([marketplaceAccountId], map: "marketplace_orders_marketplace_account_id_idx")
+  @@index([soldAt], map: "marketplace_orders_sold_at_idx")
+  @@index([normalizedStatus], map: "marketplace_orders_normalized_status_idx")
+  @@index([marketplaceAccountId, soldAt], map: "marketplace_orders_account_sold_at_idx")
+  @@map("marketplace_orders")
+}
+
+model MarketplaceOrderItem {
+  id                       String                  @id @default(uuid()) @db.Uuid
+  marketplaceOrderId       String                  @map("marketplace_order_id") @db.Uuid
+  marketplaceListingItemId String?                 @map("marketplace_listing_item_id") @db.Uuid
+  productId                String?                 @map("product_id") @db.Uuid
+  externalSellableId       String                  @map("external_sellable_id")
+  sellerSku                String?                 @map("seller_sku")
+  title                    String?
+  quantity                 Int
+  unitPrice                Decimal                 @map("unit_price") @db.Decimal(14, 2)
+  grossAmount              Decimal                 @map("gross_amount") @db.Decimal(14, 2)
+  createdAt                DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  marketplaceOrder         MarketplaceOrder        @relation(fields: [marketplaceOrderId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_order_items_marketplace_order_id_fkey")
+  marketplaceListingItem   MarketplaceListingItem? @relation(fields: [marketplaceListingItemId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "marketplace_order_items_marketplace_listing_item_id_fkey")
+  product                  Product?                @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_order_items_product_id_fkey")
+
+  @@index([marketplaceOrderId], map: "marketplace_order_items_marketplace_order_id_idx")
+  @@index([marketplaceListingItemId], map: "marketplace_order_items_marketplace_listing_item_id_idx")
+  @@index([productId], map: "marketplace_order_items_product_id_idx")
+  @@index([sellerSku], map: "marketplace_order_items_seller_sku_idx")
+  @@index([externalSellableId], map: "marketplace_order_items_external_sellable_id_idx")
+  @@map("marketplace_order_items")
 }
