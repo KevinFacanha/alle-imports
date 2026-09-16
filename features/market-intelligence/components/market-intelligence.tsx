@@ -1,6 +1,8 @@
+"use client"
+
 import { ArrowUpRight, ChevronRight, Search } from "lucide-react"
 
-import type { MarketIntelligenceProps } from "@/features/market-intelligence/types"
+import { useMarketIntelligence } from "@/features/market-intelligence/components/market-intelligence-provider"
 import {
   listingHealthMetrics,
   marketAdvantages,
@@ -9,7 +11,9 @@ import {
   marketSummaryMetrics,
 } from "@/mocks/market-intelligence"
 
-export function MarketIntelligence({ product, setProduct }: MarketIntelligenceProps) {
+export function MarketIntelligence() {
+  const { product, setProduct } = useMarketIntelligence()
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">

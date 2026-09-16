@@ -1,9 +1,13 @@
+"use client"
+
 import { Bot, ChevronRight, Send, Sparkles } from "lucide-react"
 
+import { useAssistant } from "@/features/assistant/components/assistant-provider"
 import { assistantSuggestions } from "@/mocks/chat-messages"
-import type { AssistantProps } from "@/features/assistant/types"
 
-export function Assistant({ input, setInput, messages, ask }: AssistantProps) {
+export function Assistant() {
+  const { input, setInput, messages, ask } = useAssistant()
+
   return (
     <div className="mx-auto flex min-h-[calc(100vh-136px)] max-w-[900px] flex-col">
       <div className="mb-8 flex items-start justify-between">

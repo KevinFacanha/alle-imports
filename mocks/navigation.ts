@@ -12,11 +12,12 @@ import {
 import type { NavigationItem } from "@/types/navigation"
 
 export const navigationItems: NavigationItem[] = [
-  { id: "assistente", label: "Assistente", icon: MessageSquare },
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "operacao", label: "Operação", icon: Activity },
+  { id: "assistente", href: "/assistant", label: "Assistente", icon: MessageSquare },
+  { id: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "operacao", href: "/operation", label: "Operação", icon: Activity },
   {
     id: "alertas",
+    href: "/alerts",
     label: "Alertas",
     icon: Bell,
     badge: {
@@ -26,6 +27,7 @@ export const navigationItems: NavigationItem[] = [
   },
   {
     id: "aprovacoes",
+    href: "/approvals",
     label: "Aprovações",
     icon: Check,
     badge: {
@@ -33,7 +35,12 @@ export const navigationItems: NavigationItem[] = [
       className: "bg-amber-100 text-amber-700",
     },
   },
-  { id: "historico", label: "Histórico", icon: History },
-  { id: "integracoes", label: "Integrações", icon: PlugZap },
-  { id: "inteligencia", label: "Inteligência de Mercado", icon: BarChart3 },
+  { id: "historico", href: "/history", label: "Histórico", icon: History },
+  { id: "integracoes", href: "/integrations", label: "Integrações", icon: PlugZap },
+  {
+    id: "inteligencia",
+    href: "/market-intelligence",
+    label: "Inteligência de Mercado",
+    icon: BarChart3,
+  },
 ]

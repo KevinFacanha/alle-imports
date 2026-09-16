@@ -1,5 +1,5 @@
-import { FinanceApp } from "@/components/finance/finance-app"
+import { redirect } from "next/navigation"
 
 export default function Page() {
-  return <FinanceApp />
+  redirect("/assistant")
 }

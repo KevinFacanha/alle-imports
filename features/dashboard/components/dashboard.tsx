@@ -1,3 +1,5 @@
+"use client"
+
 import { ChevronRight, Clock3, ShieldCheck } from "lucide-react"
 import {
   Area,

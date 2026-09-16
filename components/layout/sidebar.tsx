@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { ChevronRight, CircleHelp, Settings2, Sparkles } from "lucide-react"
 
 import { navigationItems } from "@/mocks/navigation"
@@ -6,7 +7,7 @@ import type { View } from "@/types/navigation"
 interface SidebarProps {
   activeView: View
   isOpen: boolean
-  onNavigate: (view: View) => void
+  onNavigate: () => void
 }
 
 export function Sidebar({ activeView, isOpen, onNavigate }: SidebarProps) {
@@ -30,10 +31,11 @@ export function Sidebar({ activeView, isOpen, onNavigate }: SidebarProps) {
           Workspace
         </div>
         <nav className="flex flex-col gap-1">
-          {navigationItems.map(({ id, label, icon: Icon, badge }) => (
-            <button
+          {navigationItems.map(({ id, href, label, icon: Icon, badge }) => (
+            <Link
               key={id}
-              onClick={() => onNavigate(id)}
+              href={href}
+              onClick={onNavigate}
               className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-semibold transition ${activeView === id ? "bg-[#6254d9] text-white shadow-md shadow-indigo-100" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`}
             >
               <Icon size={17} />
@@ -43,7 +45,7 @@ export function Sidebar({ activeView, isOpen, onNavigate }: SidebarProps) {
                   {badge.label}
                 </span>
               )}
-            </button>
+            </Link>
           ))}
         </nav>
         <div className="mt-auto">
@@ -75,7 +77,7 @@ export function Sidebar({ activeView, isOpen, onNavigate }: SidebarProps) {
       {isOpen && (
         <button
           aria-label="Fechar menu"
-          onClick={() => onNavigate(activeView)}
+          onClick={onNavigate}
           className="fixed inset-0 z-20 bg-slate-900/20 lg:hidden"
         />
       )}

@@ -1,9 +1,13 @@
+"use client"
+
 import { Check, Zap } from "lucide-react"
 
-import type { ApprovalsProps } from "@/features/approvals/types"
+import { useApprovals } from "@/features/approvals/components/approvals-provider"
 import { approvals } from "@/mocks/approvals"
 
-export function Approvals({ approved, setApproved }: ApprovalsProps) {
+export function Approvals() {
+  const { approved, setApproved } = useApprovals()
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
