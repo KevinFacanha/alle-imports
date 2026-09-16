@@ -18,6 +18,8 @@ describe('GET /api/v1/health', () => {
     process.env.NODE_ENV = 'test';
     process.env.PORT = '3001';
     process.env.WEB_ORIGIN = 'http://localhost:3000';
+    process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
+    process.env.DIRECT_URL = 'postgresql://localhost:5432/test';
 
     const { AppModule } = await import('../app.module.js');
     app = await NestFactory.create(AppModule, { logger: false });

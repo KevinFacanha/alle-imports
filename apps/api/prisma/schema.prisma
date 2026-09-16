@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Marketplace {
+  MERCADO_LIVRE
+  SHOPEE
+}
+
+model Product {
+  id        String   @id @default(uuid()) @db.Uuid
+  sku       String   @unique(map: "products_sku_key")
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("products")
+}
+
+model MarketplaceAccount {
+  id                String               @id @default(uuid()) @db.Uuid
+  marketplace       Marketplace
+  externalAccountId String               @map("external_account_id")
+  name              String
+  active            Boolean              @default(true)
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  listings          MarketplaceListing[]
+
+  @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
+  @@map("marketplace_accounts")
+}
+
+model MarketplaceListing {
+  id                   String             @id @default(uuid()) @db.Uuid
+  marketplaceAccountId String             @map("marketplace_account_id") @db.Uuid
+  externalListingId    String             @map("external_listing_id")
+  title                String?
+  status               String?
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccount   MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listings_marketplace_account_id_fkey")
+
+  @@unique([marketplaceAccountId, externalListingId], map: "marketplace_listings_account_external_listing_id_key")
+  @@index([marketplaceAccountId], map: "marketplace_listings_marketplace_account_id_idx")
+  @@map("marketplace_listings")
+}

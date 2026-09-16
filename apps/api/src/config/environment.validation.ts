@@ -2,6 +2,8 @@ import { plainToInstance, Type } from 'class-transformer';
 import {
   IsEnum,
   IsInt,
+  IsNotEmpty,
+  IsString,
   IsUrl,
   Max,
   Min,
@@ -26,6 +28,14 @@ export class EnvironmentVariables {
 
   @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false })
   WEB_ORIGIN!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  DATABASE_URL!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  DIRECT_URL!: string;
 }
 
 export function validateEnvironment(
