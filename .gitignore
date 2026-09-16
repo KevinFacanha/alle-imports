@@ -14,6 +14,7 @@ next.user-config.*
 # Common ignores
 node_modules/
 .next/
+tsconfig.tsbuildinfo
 apps/api/dist/
 apps/api/dist-test/
 apps/api/.env
