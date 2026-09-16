@@ -1,0 +1,207 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { EnvironmentVariables } from '../../../config/environment.validation.js';
+import {
+  MercadoLivreHttpResult,
+  MercadoLivreOrdersSearchParams,
+  MercadoLivreOrdersSearchResponse,
+} from './mercado-livre.types.js';
+
+const ORDERS_SEARCH_URL = 'https://api.mercadolibre.com/orders/search';
+
+export const MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER = Symbol(
+  'MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER',
+);
+export const MERCADO_LIVRE_FETCH = Symbol('MERCADO_LIVRE_FETCH');
+export const MERCADO_LIVRE_HTTP_TIMEOUT_MS = Symbol(
+  'MERCADO_LIVRE_HTTP_TIMEOUT_MS',
+);
+
+export interface MercadoLivreAccessTokenProvider {
+  getAccessToken(): Promise<string> | string;
+}
+
+export type MercadoLivreClientErrorCode =
+  | 'UNAUTHORIZED'
+  | 'RATE_LIMITED'
+  | 'UPSTREAM_UNAVAILABLE'
+  | 'REQUEST_FAILED'
+  | 'TIMEOUT'
+  | 'INVALID_RESPONSE'
+  | 'MISSING_ACCESS_TOKEN';
+
+export class MercadoLivreClientError extends Error {
+  constructor(
+    message: string,
+    readonly code: MercadoLivreClientErrorCode,
+    readonly statusCode?: number,
+    readonly retryAfter?: string,
+  ) {
+    super(message);
+    this.name = 'MercadoLivreClientError';
+  }
+}
+
+@Injectable()
+export class ConfigMercadoLivreAccessTokenProvider
+  implements MercadoLivreAccessTokenProvider
+{
+  constructor(
+    private readonly config: ConfigService<EnvironmentVariables, true>,
+  ) {}
+
+  getAccessToken(): string {
+    const accessToken = this.config.get('MELI_ACCESS_TOKEN', { infer: true });
+
+    if (!accessToken) {
+      throw new MercadoLivreClientError(
+        'Mercado Livre access token is not configured.',
+        'MISSING_ACCESS_TOKEN',
+      );
+    }
+
+    return accessToken;
+  }
+}
+
+@Injectable()
+export class MercadoLivreClient {
+  constructor(
+    @Inject(MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER)
+    private readonly accessTokenProvider: MercadoLivreAccessTokenProvider,
+    @Inject(MERCADO_LIVRE_FETCH)
+    private readonly fetchImplementation: typeof fetch,
+    @Inject(MERCADO_LIVRE_HTTP_TIMEOUT_MS)
+    private readonly timeoutMs: number,
+  ) {}
+
+  async searchOrders(
+    params: MercadoLivreOrdersSearchParams,
+  ): Promise<MercadoLivreHttpResult<MercadoLivreOrdersSearchResponse>> {
+    const accessToken = await this.accessTokenProvider.getAccessToken();
+    const url = new URL(ORDERS_SEARCH_URL);
+    url.searchParams.set('seller', params.seller);
+    url.searchParams.set('order.date_created.from', params.dateCreatedFrom);
+    url.searchParams.set('order.date_created.to', params.dateCreatedTo);
+    url.searchParams.set('offset', String(params.offset));
+    url.searchParams.set('limit', String(params.limit));
+    url.searchParams.set('sort', params.sort);
+
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), this.timeoutMs);
+
+    try {
+      const response = await this.fetchImplementation(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        signal: abortController.signal,
+      });
+
+      if (response.status === 401) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre authentication failed.',
+          'UNAUTHORIZED',
+          response.status,
+        );
+      }
+
+      if (response.status === 429) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre rate limit was reached.',
+          'RATE_LIMITED',
+          response.status,
+          response.headers.get('retry-after') ?? undefined,
+        );
+      }
+
+      if (response.status >= 500) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre is temporarily unavailable.',
+          'UPSTREAM_UNAVAILABLE',
+          response.status,
+        );
+      }
+
+      if (!response.ok) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre rejected the orders request.',
+          'REQUEST_FAILED',
+          response.status,
+        );
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new MercadoLivreClientError(
+          'Mercado Livre returned an invalid JSON response.',
+          'INVALID_RESPONSE',
+          response.status,
+        );
+      }
+
+      if (!isOrdersSearchResponse(data)) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre returned an unexpected orders response.',
+          'INVALID_RESPONSE',
+          response.status,
+        );
+      }
+
+      return {
+        data,
+        partial: response.status === 206,
+      };
+    } catch (error: unknown) {
+      if (error instanceof MercadoLivreClientError) {
+        throw error;
+      }
+
+      if (isAbortError(error)) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre request timed out.',
+          'TIMEOUT',
+        );
+      }
+
+      throw new MercadoLivreClientError(
+        'Mercado Livre request failed.',
+        'UPSTREAM_UNAVAILABLE',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function isOrdersSearchResponse(
+  value: unknown,
+): value is MercadoLivreOrdersSearchResponse {
+  if (!isRecord(value) || !Array.isArray(value.results)) {
+    return false;
+  }
+
+  const paging = value.paging;
+  return (
+    isRecord(paging) &&
+    typeof paging.total === 'number' &&
+    typeof paging.offset === 'number' &&
+    typeof paging.limit === 'number'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.name === 'TimeoutError')
+  );
+}
