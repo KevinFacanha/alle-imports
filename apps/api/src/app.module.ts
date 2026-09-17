@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { validateEnvironment } from './config/environment.validation.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
+import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { MercadoLivreModule } from './modules/marketplaces/mercado-livre/mercado-livre.module.js';
 
 @Module({
@@ -15,6 +16,7 @@ import { MercadoLivreModule } from './modules/marketplaces/mercado-livre/mercado
     }),
     DatabaseModule,
     HealthModule,
+    AnalyticsModule,
     MercadoLivreModule,
   ],
 })

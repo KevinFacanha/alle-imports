@@ -4,6 +4,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsString,
+  IsTimeZone,
   IsUrl,
   Max,
   Min,
@@ -28,6 +29,9 @@ export class EnvironmentVariables {
 
   @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false })
   WEB_ORIGIN!: string;
+
+  @IsTimeZone()
+  BUSINESS_TIMEZONE = 'America/Sao_Paulo';
 
   @IsString()
   @IsNotEmpty()
