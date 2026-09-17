@@ -53,7 +53,7 @@ export class MarketplaceAuthorizationService
       async (transaction) => {
         // A transaction-scoped advisory lock serializes refresh-token rotation
         // for this account across every API process sharing PostgreSQL.
-        await transaction.$queryRaw(
+        await transaction.$executeRaw(
           Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${marketplaceAccountId}))`,
         );
 

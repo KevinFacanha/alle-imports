@@ -134,6 +134,7 @@ model MarketplaceOrderItem {
   marketplaceOrderId       String                  @map("marketplace_order_id") @db.Uuid
   marketplaceListingItemId String?                 @map("marketplace_listing_item_id") @db.Uuid
   productId                String?                 @map("product_id") @db.Uuid
+  externalListingId        String                  @map("external_listing_id")
   externalSellableId       String                  @map("external_sellable_id")
   sellerSku                String?                 @map("seller_sku")
   title                    String?
@@ -145,10 +146,12 @@ model MarketplaceOrderItem {
   marketplaceListingItem   MarketplaceListingItem? @relation(fields: [marketplaceListingItemId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "marketplace_order_items_marketplace_listing_item_id_fkey")
   product                  Product?                @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_order_items_product_id_fkey")
 
+  @@unique([marketplaceOrderId, externalSellableId], map: "marketplace_order_items_order_external_sellable_id_key")
   @@index([marketplaceOrderId], map: "marketplace_order_items_marketplace_order_id_idx")
   @@index([marketplaceListingItemId], map: "marketplace_order_items_marketplace_listing_item_id_idx")
   @@index([productId], map: "marketplace_order_items_product_id_idx")
   @@index([sellerSku], map: "marketplace_order_items_seller_sku_idx")
   @@index([externalSellableId], map: "marketplace_order_items_external_sellable_id_idx")
+  @@index([externalListingId], map: "marketplace_order_items_external_listing_id_idx")
   @@map("marketplace_order_items")
 }

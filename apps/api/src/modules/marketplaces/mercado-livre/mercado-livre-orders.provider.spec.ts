@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Marketplace, MarketplaceAccount } from '@prisma/client';
+import { Marketplace, MarketplaceAccount, Prisma } from '@prisma/client';
 
 import { MarketplaceOrderStatus } from '../domain/marketplace-order.types.js';
 import {
@@ -28,8 +28,15 @@ const MARKETPLACE_ACCOUNT: MarketplaceAccount = {
 };
 
 describe('MercadoLivreOrdersProvider', () => {
-  it('maps a simple order without variation to normalized domain data', async () => {
-    const order = makeOrder();
+  it('maps an item without discount using the official gross_price', async () => {
+    const order = makeOrder({
+      order_items: [
+        {
+          ...makeOrder().order_items[0],
+          gross_price: 39.8,
+        },
+      ],
+    });
     const { provider } = makeProvider([
       jsonResponse(makeSearchResponse([order])),
     ]);
@@ -45,7 +52,7 @@ describe('MercadoLivreOrdersProvider', () => {
       soldAt: new Date('2026-09-01T12:30:00.000Z'),
       cancelledAt: null,
       currency: 'BRL',
-      grossAmount: 39.8,
+      grossAmount: new Prisma.Decimal('39.8'),
       items: [
         {
           externalListingId: 'MLB1000',
@@ -53,14 +60,14 @@ describe('MercadoLivreOrdersProvider', () => {
           sellerSku: null,
           title: 'Produto simples',
           quantity: 2,
-          unitPrice: 19.9,
-          grossAmount: 39.8,
+          unitPrice: new Prisma.Decimal('19.9'),
+          grossAmount: new Prisma.Decimal('39.8'),
         },
       ],
     });
   });
 
-  it('uses variation_id as externalSellableId and preserves seller SKU', async () => {
+  it('preserves gross_price when it differs from unit_price times quantity', async () => {
     const order = makeOrder({
       order_items: [
         {
@@ -89,9 +96,28 @@ describe('MercadoLivreOrdersProvider', () => {
       sellerSku: 'SKU-AZUL-M',
       title: 'Camiseta azul',
       quantity: 2,
-      unitPrice: 40,
-      grossAmount: 100,
+      unitPrice: new Prisma.Decimal('40'),
+      grossAmount: new Prisma.Decimal('100'),
     });
+  });
+
+  it('falls back explicitly to unit_price times quantity when gross_price is absent', async () => {
+    const order = makeOrder({
+      order_items: [
+        {
+          ...makeOrder().order_items[0],
+          quantity: 3,
+          unit_price: 12.34,
+        },
+      ],
+    });
+    const { provider } = makeProvider([
+      jsonResponse(makeSearchResponse([order])),
+    ]);
+
+    const result = await provider.listOrders(makeListParams());
+
+    assert.equal(result.orders[0]?.items[0]?.grossAmount.toString(), '37.02');
   });
 
   it('maps every documented raw order status explicitly', async () => {

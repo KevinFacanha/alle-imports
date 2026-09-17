@@ -7,6 +7,10 @@ export interface MercadoLivreOrderItem {
   };
   quantity: number;
   unit_price: number;
+  /**
+   * Total bruto/original do item para a quantidade comprada, antes de descontos.
+   * Pode estar ausente em payloads antigos do Mercado Livre.
+   */
   gross_price?: number | null;
 }
 

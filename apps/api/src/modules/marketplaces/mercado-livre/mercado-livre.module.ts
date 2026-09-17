@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { OrdersIngestionService } from '../application/orders-ingestion.service.js';
 import { MARKETPLACE_ORDERS_PROVIDER } from '../domain/marketplace-orders.provider.js';
 import {
   MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER,
@@ -49,6 +50,7 @@ import { TokenEncryptionService } from './oauth/token-encryption.service.js';
     },
     MercadoLivreClient,
     MercadoLivreOrdersProvider,
+    OrdersIngestionService,
     {
       provide: MARKETPLACE_ORDERS_PROVIDER,
       useExisting: MercadoLivreOrdersProvider,
@@ -58,6 +60,7 @@ import { TokenEncryptionService } from './oauth/token-encryption.service.js';
     MARKETPLACE_ORDERS_PROVIDER,
     MercadoLivreOrdersProvider,
     MarketplaceAuthorizationService,
+    OrdersIngestionService,
   ],
 })
 export class MercadoLivreModule {}

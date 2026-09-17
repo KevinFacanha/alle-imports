@@ -13,6 +13,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:api": "npm run test --workspace=@ale-intelligence/api",
+    "ingest:ml:orders": "npm run ingest:ml:orders --workspace=@ale-intelligence/api --",
     "typecheck": "next typegen && tsc --noEmit",
     "db:generate": "npm run db:generate --workspace=@ale-intelligence/api",
     "db:validate": "npm run db:validate --workspace=@ale-intelligence/api",

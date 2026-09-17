@@ -2,7 +2,11 @@ import {
   MarketplaceOrder,
   MarketplaceOrderStatus,
 } from '../domain/marketplace-order.types.js';
-import { MercadoLivreOrder } from './mercado-livre.types.js';
+import { Prisma } from '@prisma/client';
+import {
+  MercadoLivreOrder,
+  MercadoLivreOrderItem,
+} from './mercado-livre.types.js';
 
 const STATUS_MAPPING: Readonly<Record<string, MarketplaceOrderStatus>> = {
   confirmed: MarketplaceOrderStatus.Processing,
@@ -34,10 +38,10 @@ export function mapMercadoLivreOrder(
       ? parseDate(source.cancel_detail.date, 'order.cancel_detail.date')
       : null,
     currency: source.currency_id,
-    grossAmount: source.total_amount,
+    grossAmount: decimal(source.total_amount),
     items: source.order_items.map((orderItem) => {
       const externalListingId = String(orderItem.item.id);
-      const unitPrice = orderItem.unit_price;
+      const unitPrice = decimal(orderItem.unit_price);
 
       return {
         externalListingId,
@@ -50,11 +54,27 @@ export function mapMercadoLivreOrder(
         title: orderItem.item.title ?? null,
         quantity: orderItem.quantity,
         unitPrice,
-        grossAmount:
-          orderItem.gross_price ?? unitPrice * orderItem.quantity,
+        grossAmount: mapItemGrossAmount(orderItem, unitPrice),
       };
     }),
   };
+}
+
+function mapItemGrossAmount(
+  orderItem: MercadoLivreOrderItem,
+  unitPrice: Prisma.Decimal,
+): Prisma.Decimal {
+  if (orderItem.gross_price !== null && orderItem.gross_price !== undefined) {
+    return decimal(orderItem.gross_price);
+  }
+
+  // Compatibilidade com payloads antigos: este valor efetivo não substitui a
+  // semântica oficial de gross_price, que é o total original antes de descontos.
+  return unitPrice.mul(orderItem.quantity);
+}
+
+function decimal(value: number): Prisma.Decimal {
+  return new Prisma.Decimal(value.toString());
 }
 
 function parseDate(value: string, field: string): Date {

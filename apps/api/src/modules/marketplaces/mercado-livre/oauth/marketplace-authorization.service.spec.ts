@@ -151,7 +151,7 @@ class AuthorizationDatabaseFake {
   ): Promise<T> => {
     this.transactionCount += 1;
     return operation({
-      $queryRaw: async (): Promise<unknown[]> => [],
+      $executeRaw: async (): Promise<number> => 1,
       marketplaceAuthorization: {
         findUnique: async (): Promise<StoredAuthorization | null> =>
           this.authorization,

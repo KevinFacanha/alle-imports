@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 export enum MarketplaceOrderStatus {
   Pending = 'PENDING',
   Paid = 'PAID',
@@ -16,8 +18,12 @@ export interface MarketplaceOrderItem {
   sellerSku: string | null;
   title: string | null;
   quantity: number;
-  unitPrice: number;
-  grossAmount: number;
+  unitPrice: Prisma.Decimal;
+  /**
+   * Total bruto do item antes de descontos. Quando a origem não o informa,
+   * contém o fallback explícito de unitPrice × quantity.
+   */
+  grossAmount: Prisma.Decimal;
 }
 
 export interface MarketplaceOrder {
@@ -27,7 +33,8 @@ export interface MarketplaceOrder {
   soldAt: Date;
   cancelledAt: Date | null;
   currency: string;
-  grossAmount: number;
+  /** Valor total da order informado pelo marketplace. */
+  grossAmount: Prisma.Decimal;
   items: MarketplaceOrderItem[];
 }
 
