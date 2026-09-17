@@ -65,7 +65,13 @@ export class MercadoLivreOrdersProvider implements MarketplaceOrdersProvider {
       }
       visitedResponseOffsets.add(page.paging.offset);
 
-      orders.push(...page.results.map(mapMercadoLivreOrder));
+      const mappedOrders = page.results.map(mapMercadoLivreOrder);
+      orders.push(
+        ...mappedOrders.filter(
+          (order) =>
+            order.soldAt >= params.dateFrom && order.soldAt < params.dateTo,
+        ),
+      );
 
       if (
         page.paging.offset + page.paging.limit >= page.paging.total
@@ -95,8 +101,8 @@ function validateParams(params: ListMarketplaceOrdersParams): void {
     throw new Error('dateFrom and dateTo must be valid dates.');
   }
 
-  if (params.dateFrom > params.dateTo) {
-    throw new Error('dateFrom must not be after dateTo.');
+  if (params.dateFrom >= params.dateTo) {
+    throw new Error('dateFrom must be before dateTo.');
   }
 
   if (

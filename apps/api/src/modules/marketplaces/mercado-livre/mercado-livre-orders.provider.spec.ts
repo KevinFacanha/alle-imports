@@ -198,6 +198,50 @@ describe('MercadoLivreOrdersProvider', () => {
     );
   });
 
+  it('keeps only orders inside the requested half-open interval', async () => {
+    const before = makeOrder({
+      id: 1,
+      date_created: '2026-08-31T23:59:59.999Z',
+    });
+    const atStart = makeOrder({
+      id: 2,
+      date_created: DATE_FROM.toISOString(),
+    });
+    const beforeEnd = makeOrder({
+      id: 3,
+      date_created: '2026-09-01T23:59:59.999Z',
+    });
+    const atEnd = makeOrder({
+      id: 4,
+      date_created: DATE_TO.toISOString(),
+    });
+    const { provider } = makeProvider([
+      jsonResponse(
+        makeSearchResponse([before, atStart, beforeEnd, atEnd]),
+      ),
+    ]);
+
+    const result = await provider.listOrders(makeListParams());
+
+    assert.deepEqual(
+      result.orders.map((order) => order.externalOrderId),
+      ['2', '3'],
+    );
+  });
+
+  it('rejects an empty interval before calling the client', async () => {
+    const { provider, calls } = makeProvider([]);
+
+    await assert.rejects(
+      provider.listOrders({
+        ...makeListParams(),
+        dateFrom: DATE_TO,
+      }),
+      /dateFrom must be before dateTo/,
+    );
+    assert.equal(calls.length, 0);
+  });
+
   it('advances by the upstream page limit when a partial page omits results', async () => {
     const { provider, calls } = makeProvider([
       jsonResponse(makeSearchResponse([makeOrder({ id: 1 })], 0, 2, 3), 206),

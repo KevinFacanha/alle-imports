@@ -5,6 +5,8 @@ import {
   MercadoLivreHttpResult,
   MercadoLivreOrdersSearchParams,
   MercadoLivreOrdersSearchResponse,
+  MercadoLivreShipment,
+  MercadoLivreUserVisitsResponse,
 } from './mercado-livre.types.js';
 
 const ORDERS_SEARCH_URL = 'https://api.mercadolibre.com/orders/search';
@@ -158,6 +160,152 @@ export class MercadoLivreClient {
       clearTimeout(timeout);
     }
   }
+
+  async getUserVisits(
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    marketplaceAccount: Pick<MarketplaceAccount, 'id'>,
+  ): Promise<MercadoLivreUserVisitsResponse> {
+    const url = new URL(
+      `https://api.mercadolibre.com/users/${encodeURIComponent(userId)}/items_visits`,
+    );
+    url.searchParams.set('date_from', dateFrom);
+    url.searchParams.set('date_to', dateTo);
+
+    const response = await this.getJson(
+      url,
+      marketplaceAccount,
+      isUserVisitsResponse,
+      'visits',
+    );
+    if (response === null) {
+      throw new MercadoLivreClientError(
+        'Mercado Livre returned an unexpected visits response.',
+        'INVALID_RESPONSE',
+      );
+    }
+    return response;
+  }
+
+  async getOrderShipments(
+    externalOrderId: string,
+    marketplaceAccount: Pick<MarketplaceAccount, 'id'>,
+  ): Promise<MercadoLivreShipment[]> {
+    const url = new URL(
+      `https://api.mercadolibre.com/orders/${encodeURIComponent(externalOrderId)}/shipments`,
+    );
+
+    const response = await this.getJson(
+      url,
+      marketplaceAccount,
+      isOrderShipmentsResponse,
+      'order shipments',
+      { 'X-New-Domain': 'true' },
+      true,
+    );
+
+    if (response === null) {
+      return [];
+    }
+    return Array.isArray(response) ? response : [response];
+  }
+
+  private async getJson<T>(
+    url: URL,
+    marketplaceAccount: Pick<MarketplaceAccount, 'id'>,
+    validator: (value: unknown) => value is T,
+    resourceName: string,
+    extraHeaders: HeadersInit = {},
+    notFoundAsNull = false,
+  ): Promise<T | null> {
+    const accessToken = await this.accessTokenProvider.getAccessToken(
+      marketplaceAccount,
+    );
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), this.timeoutMs);
+
+    try {
+      const response = await this.fetchImplementation(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          ...extraHeaders,
+        },
+        signal: abortController.signal,
+      });
+
+      if (response.status === 404 && notFoundAsNull) {
+        return null;
+      }
+      if (response.status === 401) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre authentication failed.',
+          'UNAUTHORIZED',
+          response.status,
+        );
+      }
+      if (response.status === 429) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre rate limit was reached.',
+          'RATE_LIMITED',
+          response.status,
+          response.headers.get('retry-after') ?? undefined,
+        );
+      }
+      if (response.status >= 500) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre is temporarily unavailable.',
+          'UPSTREAM_UNAVAILABLE',
+          response.status,
+        );
+      }
+      if (!response.ok) {
+        throw new MercadoLivreClientError(
+          `Mercado Livre rejected the ${resourceName} request.`,
+          'REQUEST_FAILED',
+          response.status,
+        );
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new MercadoLivreClientError(
+          'Mercado Livre returned an invalid JSON response.',
+          'INVALID_RESPONSE',
+          response.status,
+        );
+      }
+
+      if (!validator(data)) {
+        throw new MercadoLivreClientError(
+          `Mercado Livre returned an unexpected ${resourceName} response.`,
+          'INVALID_RESPONSE',
+          response.status,
+        );
+      }
+      return data;
+    } catch (error: unknown) {
+      if (error instanceof MercadoLivreClientError) {
+        throw error;
+      }
+      if (isAbortError(error)) {
+        throw new MercadoLivreClientError(
+          'Mercado Livre request timed out.',
+          'TIMEOUT',
+        );
+      }
+      throw new MercadoLivreClientError(
+        'Mercado Livre request failed.',
+        'UPSTREAM_UNAVAILABLE',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function isOrdersSearchResponse(
@@ -178,6 +326,33 @@ function isOrdersSearchResponse(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isUserVisitsResponse(
+  value: unknown,
+): value is MercadoLivreUserVisitsResponse {
+  return (
+    isRecord(value) &&
+    (typeof value.user_id === 'string' || typeof value.user_id === 'number') &&
+    typeof value.date_from === 'string' &&
+    typeof value.date_to === 'string' &&
+    typeof value.total_visits === 'number' &&
+    Number.isSafeInteger(value.total_visits) &&
+    value.total_visits >= 0
+  );
+}
+
+function isOrderShipmentsResponse(
+  value: unknown,
+): value is MercadoLivreShipment | MercadoLivreShipment[] {
+  const shipments = Array.isArray(value) ? value : [value];
+  return shipments.every(
+    (shipment) =>
+      isRecord(shipment) &&
+      (typeof shipment.id === 'string' || typeof shipment.id === 'number') &&
+      (shipment.logistic_type === null ||
+        typeof shipment.logistic_type === 'string'),
+  );
 }
 
 function isAbortError(error: unknown): boolean {

@@ -48,3 +48,20 @@ export interface MercadoLivreHttpResult<T> {
   data: T;
   partial: boolean;
 }
+
+export interface MercadoLivreUserVisitsResponse {
+  user_id: string | number;
+  date_from: string;
+  date_to: string;
+  total_visits: number;
+  visits_detail?: Array<{
+    company: string;
+    quantity: number;
+  }>;
+}
+
+export interface MercadoLivreShipment {
+  id: string | number;
+  logistic_type: string | null;
+  type?: string | null;
+}

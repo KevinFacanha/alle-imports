@@ -58,6 +58,7 @@ import { TokenEncryptionService } from './oauth/token-encryption.service.js';
   ],
   exports: [
     MARKETPLACE_ORDERS_PROVIDER,
+    MercadoLivreClient,
     MercadoLivreOrdersProvider,
     MarketplaceAuthorizationService,
     OrdersIngestionService,

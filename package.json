@@ -15,6 +15,7 @@
     "test:api": "npm run test --workspace=@ale-intelligence/api",
     "analytics:daily-sales": "npm run analytics:daily-sales --workspace=@ale-intelligence/api --",
     "ingest:ml:orders": "npm run ingest:ml:orders --workspace=@ale-intelligence/api --",
+    "reconcile:ml:metrics": "npm run reconcile:ml:metrics --workspace=@ale-intelligence/api --",
     "typecheck": "next typegen && tsc --noEmit",
     "db:generate": "npm run db:generate --workspace=@ale-intelligence/api",
     "db:validate": "npm run db:validate --workspace=@ale-intelligence/api",
