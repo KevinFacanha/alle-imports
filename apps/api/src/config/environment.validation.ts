@@ -3,7 +3,6 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
-  IsOptional,
   IsString,
   IsUrl,
   Max,
@@ -38,25 +37,20 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   DIRECT_URL!: string;
 
-  @IsOptional()
   @IsString()
-  MELI_CLIENT_ID?: string;
+  @IsNotEmpty()
+  MELI_CLIENT_ID!: string;
 
-  @IsOptional()
   @IsString()
-  MELI_CLIENT_SECRET?: string;
+  @IsNotEmpty()
+  MELI_CLIENT_SECRET!: string;
 
-  @IsOptional()
-  @IsString()
-  MELI_ACCESS_TOKEN?: string;
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false })
+  MELI_REDIRECT_URI!: string;
 
-  @IsOptional()
   @IsString()
-  MELI_REFRESH_TOKEN?: string;
-
-  @IsOptional()
-  @IsString()
-  MELI_SELLER_ID?: string;
+  @IsNotEmpty()
+  OAUTH_TOKEN_ENCRYPTION_KEY!: string;
 }
 
 export function validateEnvironment(

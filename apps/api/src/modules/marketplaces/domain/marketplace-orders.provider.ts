@@ -1,3 +1,5 @@
+import { MarketplaceAccount } from '@prisma/client';
+
 import { MarketplaceOrdersResult } from './marketplace-order.types.js';
 
 export const MARKETPLACE_ORDERS_PROVIDER = Symbol(
@@ -7,7 +9,7 @@ export const MARKETPLACE_ORDERS_PROVIDER = Symbol(
 export type MarketplaceOrdersSort = 'date_asc' | 'date_desc';
 
 export interface ListMarketplaceOrdersParams {
-  externalSellerId: string;
+  marketplaceAccount: MarketplaceAccount;
   dateFrom: Date;
   dateTo: Date;
   /** Initial upstream offset. Defaults to zero. */

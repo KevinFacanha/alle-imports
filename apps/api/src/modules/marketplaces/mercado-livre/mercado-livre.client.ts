@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { MarketplaceAccount } from '@prisma/client';
 
-import { EnvironmentVariables } from '../../../config/environment.validation.js';
 import {
   MercadoLivreHttpResult,
   MercadoLivreOrdersSearchParams,
@@ -19,7 +18,9 @@ export const MERCADO_LIVRE_HTTP_TIMEOUT_MS = Symbol(
 );
 
 export interface MercadoLivreAccessTokenProvider {
-  getAccessToken(): Promise<string> | string;
+  getAccessToken(
+    marketplaceAccount: Pick<MarketplaceAccount, 'id'>,
+  ): Promise<string> | string;
 }
 
 export type MercadoLivreClientErrorCode =
@@ -28,8 +29,7 @@ export type MercadoLivreClientErrorCode =
   | 'UPSTREAM_UNAVAILABLE'
   | 'REQUEST_FAILED'
   | 'TIMEOUT'
-  | 'INVALID_RESPONSE'
-  | 'MISSING_ACCESS_TOKEN';
+  | 'INVALID_RESPONSE';
 
 export class MercadoLivreClientError extends Error {
   constructor(
@@ -40,28 +40,6 @@ export class MercadoLivreClientError extends Error {
   ) {
     super(message);
     this.name = 'MercadoLivreClientError';
-  }
-}
-
-@Injectable()
-export class ConfigMercadoLivreAccessTokenProvider
-  implements MercadoLivreAccessTokenProvider
-{
-  constructor(
-    private readonly config: ConfigService<EnvironmentVariables, true>,
-  ) {}
-
-  getAccessToken(): string {
-    const accessToken = this.config.get('MELI_ACCESS_TOKEN', { infer: true });
-
-    if (!accessToken) {
-      throw new MercadoLivreClientError(
-        'Mercado Livre access token is not configured.',
-        'MISSING_ACCESS_TOKEN',
-      );
-    }
-
-    return accessToken;
   }
 }
 
@@ -78,8 +56,11 @@ export class MercadoLivreClient {
 
   async searchOrders(
     params: MercadoLivreOrdersSearchParams,
+    marketplaceAccount: Pick<MarketplaceAccount, 'id'>,
   ): Promise<MercadoLivreHttpResult<MercadoLivreOrdersSearchResponse>> {
-    const accessToken = await this.accessTokenProvider.getAccessToken();
+    const accessToken = await this.accessTokenProvider.getAccessToken(
+      marketplaceAccount,
+    );
     const url = new URL(ORDERS_SEARCH_URL);
     url.searchParams.set('seller', params.seller);
     url.searchParams.set('order.date_created.from', params.dateCreatedFrom);

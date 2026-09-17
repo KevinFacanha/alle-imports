@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { Marketplace, MarketplaceAccount } from '@prisma/client';
 
 import { MarketplaceOrderStatus } from '../domain/marketplace-order.types.js';
 import {
@@ -16,6 +17,15 @@ import {
 const ACCESS_TOKEN = 'test-access-token-that-must-stay-secret';
 const DATE_FROM = new Date('2026-09-01T00:00:00.000Z');
 const DATE_TO = new Date('2026-09-02T00:00:00.000Z');
+const MARKETPLACE_ACCOUNT: MarketplaceAccount = {
+  id: '00000000-0000-4000-8000-000000000001',
+  marketplace: Marketplace.MERCADO_LIVRE,
+  externalAccountId: 'seller-123',
+  name: 'Seller 123',
+  active: true,
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+};
 
 describe('MercadoLivreOrdersProvider', () => {
   it('maps a simple order without variation to normalized domain data', async () => {
@@ -200,7 +210,7 @@ describe('MercadoLivreClient', () => {
     ]);
 
     await assertClientError(
-      client.searchOrders(makeSearchParams()),
+      client.searchOrders(makeSearchParams(), MARKETPLACE_ACCOUNT),
       'UNAUTHORIZED',
       401,
     );
@@ -214,7 +224,7 @@ describe('MercadoLivreClient', () => {
     ]);
 
     await assert.rejects(
-      client.searchOrders(makeSearchParams()),
+      client.searchOrders(makeSearchParams(), MARKETPLACE_ACCOUNT),
       (error: unknown) => {
         assert.ok(error instanceof MercadoLivreClientError);
         assert.equal(error.code, 'RATE_LIMITED');
@@ -243,7 +253,7 @@ describe('MercadoLivreClient', () => {
     ]);
 
     await assertClientError(
-      client.searchOrders(makeSearchParams()),
+      client.searchOrders(makeSearchParams(), MARKETPLACE_ACCOUNT),
       'UPSTREAM_UNAVAILABLE',
       503,
     );
@@ -286,7 +296,7 @@ function makeProvider(responses: Response[]): {
 
 function makeListParams() {
   return {
-    externalSellerId: 'seller-123',
+    marketplaceAccount: MARKETPLACE_ACCOUNT,
     dateFrom: DATE_FROM,
     dateTo: DATE_TO,
   };

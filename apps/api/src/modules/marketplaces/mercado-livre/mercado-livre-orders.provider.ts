@@ -39,14 +39,17 @@ export class MercadoLivreOrdersProvider implements MarketplaceOrdersProvider {
         );
       }
 
-      const response = await this.client.searchOrders({
-        seller: params.externalSellerId,
-        dateCreatedFrom: params.dateFrom.toISOString(),
-        dateCreatedTo: params.dateTo.toISOString(),
-        offset: nextOffset,
-        limit: pageSize,
-        sort: params.sort ?? 'date_asc',
-      });
+      const response = await this.client.searchOrders(
+        {
+          seller: params.marketplaceAccount.externalAccountId,
+          dateCreatedFrom: params.dateFrom.toISOString(),
+          dateCreatedTo: params.dateTo.toISOString(),
+          offset: nextOffset,
+          limit: pageSize,
+          sort: params.sort ?? 'date_asc',
+        },
+        params.marketplaceAccount,
+      );
       const page = response.data;
       partial ||= response.partial;
 
@@ -78,8 +81,11 @@ export class MercadoLivreOrdersProvider implements MarketplaceOrdersProvider {
 }
 
 function validateParams(params: ListMarketplaceOrdersParams): void {
-  if (params.externalSellerId.trim().length === 0) {
-    throw new Error('externalSellerId is required.');
+  if (
+    params.marketplaceAccount.id.trim().length === 0 ||
+    params.marketplaceAccount.externalAccountId.trim().length === 0
+  ) {
+    throw new Error('marketplaceAccount is required.');
   }
 
   if (

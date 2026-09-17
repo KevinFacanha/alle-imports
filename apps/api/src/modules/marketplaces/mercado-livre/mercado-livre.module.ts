@@ -2,20 +2,34 @@ import { Module } from '@nestjs/common';
 
 import { MARKETPLACE_ORDERS_PROVIDER } from '../domain/marketplace-orders.provider.js';
 import {
-  ConfigMercadoLivreAccessTokenProvider,
   MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER,
   MERCADO_LIVRE_FETCH,
   MERCADO_LIVRE_HTTP_TIMEOUT_MS,
   MercadoLivreClient,
 } from './mercado-livre.client.js';
 import { MercadoLivreOrdersProvider } from './mercado-livre-orders.provider.js';
+import {
+  MERCADO_LIVRE_OAUTH_FETCH,
+  MERCADO_LIVRE_OAUTH_TIMEOUT_MS,
+  MercadoLivreOAuthClient,
+} from './oauth/mercado-livre-oauth.client.js';
+import { MercadoLivreOAuthController } from './oauth/mercado-livre-oauth.controller.js';
+import { MercadoLivreOAuthService } from './oauth/mercado-livre-oauth.service.js';
+import { MarketplaceAuthorizationService } from './oauth/marketplace-authorization.service.js';
+import { OAuthStateStore } from './oauth/oauth-state.store.js';
+import { TokenEncryptionService } from './oauth/token-encryption.service.js';
 
 @Module({
+  controllers: [MercadoLivreOAuthController],
   providers: [
-    ConfigMercadoLivreAccessTokenProvider,
+    OAuthStateStore,
+    TokenEncryptionService,
+    MercadoLivreOAuthClient,
+    MercadoLivreOAuthService,
+    MarketplaceAuthorizationService,
     {
       provide: MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER,
-      useExisting: ConfigMercadoLivreAccessTokenProvider,
+      useExisting: MarketplaceAuthorizationService,
     },
     {
       provide: MERCADO_LIVRE_FETCH,
@@ -25,6 +39,14 @@ import { MercadoLivreOrdersProvider } from './mercado-livre-orders.provider.js';
       provide: MERCADO_LIVRE_HTTP_TIMEOUT_MS,
       useValue: 10_000,
     },
+    {
+      provide: MERCADO_LIVRE_OAUTH_FETCH,
+      useValue: globalThis.fetch,
+    },
+    {
+      provide: MERCADO_LIVRE_OAUTH_TIMEOUT_MS,
+      useValue: 10_000,
+    },
     MercadoLivreClient,
     MercadoLivreOrdersProvider,
     {
@@ -32,6 +54,10 @@ import { MercadoLivreOrdersProvider } from './mercado-livre-orders.provider.js';
       useExisting: MercadoLivreOrdersProvider,
     },
   ],
-  exports: [MARKETPLACE_ORDERS_PROVIDER, MercadoLivreOrdersProvider],
+  exports: [
+    MARKETPLACE_ORDERS_PROVIDER,
+    MercadoLivreOrdersProvider,
+    MarketplaceAuthorizationService,
+  ],
 })
 export class MercadoLivreModule {}

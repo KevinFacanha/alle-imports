@@ -54,4 +54,38 @@ describe('GET /api/v1/health', () => {
       service: 'ale-intelligence-api',
     });
   });
+
+  it('redirects the Mercado Livre connect endpoint with state and PKCE', async () => {
+    const response = await fetch(
+      `${baseUrl}/api/v1/auth/mercado-livre/connect`,
+      { redirect: 'manual' },
+    );
+
+    assert.equal(response.status, 302);
+    const location = response.headers.get('location');
+    assert.ok(location);
+    const authorizationUrl = new URL(location);
+    assert.equal(
+      authorizationUrl.origin,
+      'https://auth.mercadolivre.com.br',
+    );
+    assert.ok(authorizationUrl.searchParams.get('state'));
+    assert.ok(authorizationUrl.searchParams.get('code_challenge'));
+    assert.equal(
+      authorizationUrl.searchParams.get('code_challenge_method'),
+      'S256',
+    );
+  });
+
+  it('rejects an invalid callback state without exposing credentials', async () => {
+    const response = await fetch(
+      `${baseUrl}/api/v1/auth/mercado-livre/callback?state=invalid&code=invalid`,
+    );
+    const body = await response.text();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.includes('access_token'), false);
+    assert.equal(body.includes('refresh_token'), false);
+    assert.equal(body.includes('client_secret'), false);
+  });
 });
