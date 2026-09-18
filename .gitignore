@@ -19,4 +19,7 @@ apps/api/dist/
 apps/api/dist-test/
 apps/api/.env
 apps/api/*.tsbuildinfo
+apps/api/.local-fixtures/gefinance/
+**/gefinance-report*.xlsx
+**/geinsights_*.xlsx
 .DS_Store

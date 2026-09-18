@@ -18,6 +18,7 @@
     "reconcile:ml:metrics": "npm run reconcile:ml:metrics --workspace=@ale-intelligence/api --",
     "inspect:olist:orders": "npm run inspect:olist:orders --workspace=@ale-intelligence/api --",
     "inspect:olist:only": "npm run inspect:olist:only --workspace=@ale-intelligence/api --",
+    "inspect:gefinance-report": "npm run inspect:gefinance-report --workspace=@ale-intelligence/api --",
     "list:integration:accounts": "npm run list:integration:accounts --workspace=@ale-intelligence/api",
     "typecheck": "next typegen && tsc --noEmit",
     "db:generate": "npm run db:generate --workspace=@ale-intelligence/api",
