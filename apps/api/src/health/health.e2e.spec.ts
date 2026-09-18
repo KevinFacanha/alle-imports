@@ -20,6 +20,10 @@ describe('GET /api/v1/health', () => {
     process.env.WEB_ORIGIN = 'http://localhost:3000';
     process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
     process.env.DIRECT_URL = 'postgresql://localhost:5432/test';
+    process.env.OLIST_CLIENT_ID = 'olist-e2e-client-id';
+    process.env.OLIST_CLIENT_SECRET = 'olist-e2e-client-secret';
+    process.env.OLIST_REDIRECT_URI =
+      'http://localhost:3001/api/v1/auth/olist/callback';
 
     const { AppModule } = await import('../app.module.js');
     app = await NestFactory.create(AppModule, { logger: false });
@@ -87,5 +91,25 @@ describe('GET /api/v1/health', () => {
     assert.equal(body.includes('access_token'), false);
     assert.equal(body.includes('refresh_token'), false);
     assert.equal(body.includes('client_secret'), false);
+  });
+
+  it('redirects the Olist connect endpoint with state and PKCE', async () => {
+    const response = await fetch(`${baseUrl}/api/v1/auth/olist/connect`, {
+      redirect: 'manual',
+    });
+
+    assert.equal(response.status, 302);
+    const location = response.headers.get('location');
+    assert.ok(location);
+    const authorizationUrl = new URL(location);
+    assert.equal(authorizationUrl.origin, 'https://accounts.tiny.com.br');
+    assert.equal(authorizationUrl.searchParams.get('scope'), 'openid');
+    assert.ok(authorizationUrl.searchParams.get('state'));
+    assert.ok(authorizationUrl.searchParams.get('code_challenge'));
+    assert.equal(
+      authorizationUrl.searchParams.get('code_challenge_method'),
+      'S256',
+    );
+    assert.equal(location.includes('olist-e2e-client-secret'), false);
   });
 });

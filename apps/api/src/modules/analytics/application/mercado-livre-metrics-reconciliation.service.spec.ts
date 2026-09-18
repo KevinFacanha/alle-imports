@@ -130,13 +130,16 @@ describe('MercadoLivreMetricsReconciliationService', () => {
       marketplace: 'MERCADO LIVRE',
       grossRevenueDay: '10882.00',
       salesQuantity: 118,
+      unitsSold: 130,
       fullGrossSales: '590.00',
       fullUnitsSold: 14,
+      fullSalesQuantity: 9,
       averageTicket: '92.22',
       contributionMarginPercent: '25.68',
       definitions: {
         fullGrossSales: 'Vendas brutas com filtro Mercado Envios Full',
         fullUnitsSold: 'Unidades vendidas com filtro Mercado Envios Full',
+        fullSalesQuantity: 'Quantidade de vendas com filtro Mercado Envios Full',
       },
     });
 

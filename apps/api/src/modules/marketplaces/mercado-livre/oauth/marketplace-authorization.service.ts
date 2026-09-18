@@ -2,9 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { MarketplaceAccount, Prisma } from '@prisma/client';
 
 import { DatabaseService } from '../../../../database/database.service.js';
+import { TokenEncryptionService } from '../../../integrations/oauth/token-encryption.service.js';
 import { MercadoLivreAccessTokenProvider } from '../mercado-livre.client.js';
 import { MercadoLivreOAuthClient } from './mercado-livre-oauth.client.js';
-import { TokenEncryptionService } from './token-encryption.service.js';
 
 const EXPIRY_SKEW_MS = 60_000;
 const REFRESH_TRANSACTION_TIMEOUT_MS = 20_000;

@@ -16,6 +16,8 @@ export interface MercadoLivreOrderItem {
 
 export interface MercadoLivreOrder {
   id: string | number;
+  /** Identificador oficial do carrinho/pacote, quando informado pela API. */
+  pack_id?: string | number | null;
   status: string;
   date_created: string;
   currency_id: string;

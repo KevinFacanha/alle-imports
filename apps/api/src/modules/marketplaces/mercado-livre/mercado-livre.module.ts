@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { OAuthSecurityModule } from '../../integrations/oauth/oauth-security.module.js';
 import { OrdersIngestionService } from '../application/orders-ingestion.service.js';
 import { MARKETPLACE_ORDERS_PROVIDER } from '../domain/marketplace-orders.provider.js';
 import {
@@ -17,14 +18,11 @@ import {
 import { MercadoLivreOAuthController } from './oauth/mercado-livre-oauth.controller.js';
 import { MercadoLivreOAuthService } from './oauth/mercado-livre-oauth.service.js';
 import { MarketplaceAuthorizationService } from './oauth/marketplace-authorization.service.js';
-import { OAuthStateStore } from './oauth/oauth-state.store.js';
-import { TokenEncryptionService } from './oauth/token-encryption.service.js';
 
 @Module({
+  imports: [OAuthSecurityModule],
   controllers: [MercadoLivreOAuthController],
   providers: [
-    OAuthStateStore,
-    TokenEncryptionService,
     MercadoLivreOAuthClient,
     MercadoLivreOAuthService,
     MarketplaceAuthorizationService,

@@ -69,6 +69,34 @@ model MarketplaceAuthorization {
   @@map("marketplace_authorizations")
 }
 
+model OlistAccount {
+  id                String              @id @default(uuid()) @db.Uuid
+  externalAccountId String              @unique(map: "olist_accounts_external_account_id_key") @map("external_account_id")
+  name              String
+  active            Boolean             @default(true)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  authorization     OlistAuthorization?
+
+  @@map("olist_accounts")
+}
+
+model OlistAuthorization {
+  id                    String       @id @default(uuid()) @db.Uuid
+  olistAccountId        String       @unique(map: "olist_authorizations_olist_account_id_key") @map("olist_account_id") @db.Uuid
+  accessTokenEncrypted  String       @map("access_token_encrypted")
+  refreshTokenEncrypted String       @map("refresh_token_encrypted")
+  tokenType             String?      @map("token_type")
+  scope                 String?
+  expiresAt             DateTime     @map("expires_at") @db.Timestamptz(3)
+  refreshExpiresAt      DateTime?    @map("refresh_expires_at") @db.Timestamptz(3)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  olistAccount          OlistAccount @relation(fields: [olistAccountId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "olist_authorizations_olist_account_id_fkey")
+
+  @@map("olist_authorizations")
+}
+
 model MarketplaceListing {
   id                   String                   @id @default(uuid()) @db.Uuid
   marketplaceAccountId String                   @map("marketplace_account_id") @db.Uuid

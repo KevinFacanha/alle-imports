@@ -474,12 +474,20 @@ export function buildComparison(values: ComparisonValues): ReconciliationRow[] {
       reference?.salesQuantity ?? null,
     ),
     sellerBiReferenceRow(
+      'seller_bi.unidades',
+      reference?.unitsSold ?? null,
+    ),
+    sellerBiReferenceRow(
       'seller_bi.full',
       reference?.fullGrossSales ?? null,
     ),
     sellerBiReferenceRow(
       'seller_bi.qtde_vendas_full',
       reference?.fullUnitsSold ?? null,
+    ),
+    sellerBiReferenceRow(
+      'seller_bi.quantidade_vendas_full_painel',
+      reference?.fullSalesQuantity ?? null,
     ),
     sellerBiReferenceRow(
       'seller_bi.ticket_medio',

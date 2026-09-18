@@ -10,7 +10,7 @@ import { MarketplaceAuthorizationService } from './marketplace-authorization.ser
 import {
   TokenEncryptionError,
   TokenEncryptionService,
-} from './token-encryption.service.js';
+} from '../../../integrations/oauth/token-encryption.service.js';
 
 const ACCOUNT_ID = '00000000-0000-4000-8000-000000000001';
 const CURRENT_ACCESS_TOKEN = 'current-secret-access-token';

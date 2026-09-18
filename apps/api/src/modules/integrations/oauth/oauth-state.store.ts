@@ -3,7 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 
 const STATE_TTL_MS = 10 * 60 * 1_000;
 
+export type OAuthProvider = 'mercado-livre' | 'olist';
+
 interface PendingAuthorization {
+  provider: OAuthProvider;
   codeVerifier: string;
   expiresAt: number;
   expirationTimer: ReturnType<typeof setTimeout>;
@@ -27,7 +30,10 @@ export class InvalidOAuthStateError extends Error {
 export class OAuthStateStore {
   private readonly pending = new Map<string, PendingAuthorization>();
 
-  create(now = Date.now()): OAuthAuthorizationRequest {
+  create(
+    provider: OAuthProvider,
+    now = Date.now(),
+  ): OAuthAuthorizationRequest {
     this.removeExpired(now);
 
     const state = randomBytes(32).toString('base64url');
@@ -45,7 +51,12 @@ export class OAuthStateStore {
     }, STATE_TTL_MS);
     expirationTimer.unref();
 
-    this.pending.set(state, { codeVerifier, expiresAt, expirationTimer });
+    this.pending.set(state, {
+      provider,
+      codeVerifier,
+      expiresAt,
+      expirationTimer,
+    });
 
     return {
       state,
@@ -55,16 +66,25 @@ export class OAuthStateStore {
     };
   }
 
-  consume(state: string, now = Date.now()): string {
+  consume(
+    state: string,
+    provider: OAuthProvider,
+    now = Date.now(),
+  ): string {
     const authorization = this.pending.get(state);
 
-    // Delete first so every lookup, including an expired one, is single-use.
+    // Delete first so every lookup, including an expired or mismatched one,
+    // is single-use.
     this.pending.delete(state);
     if (authorization) {
       clearTimeout(authorization.expirationTimer);
     }
 
-    if (!authorization || authorization.expiresAt <= now) {
+    if (
+      !authorization ||
+      authorization.provider !== provider ||
+      authorization.expiresAt <= now
+    ) {
       throw new InvalidOAuthStateError();
     }
 

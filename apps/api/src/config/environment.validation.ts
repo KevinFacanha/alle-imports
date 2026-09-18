@@ -54,6 +54,17 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsNotEmpty()
+  OLIST_CLIENT_ID!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  OLIST_CLIENT_SECRET!: string;
+
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true, require_tld: false })
+  OLIST_REDIRECT_URI!: string;
+
+  @IsString()
+  @IsNotEmpty()
   OAUTH_TOKEN_ENCRYPTION_KEY!: string;
 }
 

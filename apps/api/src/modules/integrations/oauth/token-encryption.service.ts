@@ -6,7 +6,7 @@ import {
   randomBytes,
 } from 'node:crypto';
 
-import { EnvironmentVariables } from '../../../../config/environment.validation.js';
+import { EnvironmentVariables } from '../../../config/environment.validation.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH_BYTES = 32;

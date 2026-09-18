@@ -9,7 +9,7 @@ import {
 import { MercadoLivreClientError } from '../modules/marketplaces/mercado-livre/mercado-livre.client.js';
 import { MercadoLivreOAuthError } from '../modules/marketplaces/mercado-livre/oauth/mercado-livre-oauth.types.js';
 import { MarketplaceAuthorizationNotFoundError } from '../modules/marketplaces/mercado-livre/oauth/marketplace-authorization.service.js';
-import { TokenEncryptionError } from '../modules/marketplaces/mercado-livre/oauth/token-encryption.service.js';
+import { TokenEncryptionError } from '../modules/integrations/oauth/token-encryption.service.js';
 
 interface CliArguments {
   accountId: string;

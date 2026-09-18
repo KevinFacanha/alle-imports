@@ -3,16 +3,21 @@ import { Prisma } from '@prisma/client';
 
 import { AppModule } from '../app.module.js';
 import {
-  MercadoLivreMetricsReconciliationError,
-  MercadoLivreMetricsReconciliationService,
-} from '../modules/analytics/application/mercado-livre-metrics-reconciliation.service.js';
-import { MercadoLivreClientError } from '../modules/marketplaces/mercado-livre/mercado-livre.client.js';
-import { MercadoLivreOAuthError } from '../modules/marketplaces/mercado-livre/oauth/mercado-livre-oauth.types.js';
-import { MarketplaceAuthorizationNotFoundError } from '../modules/marketplaces/mercado-livre/oauth/marketplace-authorization.service.js';
+  OlistAuthorizationNotFoundError,
+  OlistReauthorizationRequiredError,
+} from '../modules/integrations/olist/olist-authorization.service.js';
+import {
+  OlistOrdersClientError,
+} from '../modules/integrations/olist/olist-orders.client.js';
+import {
+  OlistOrdersInspectionError,
+  OlistOrdersInspectionService,
+} from '../modules/integrations/olist/olist-orders-inspection.service.js';
 import { TokenEncryptionError } from '../modules/integrations/oauth/token-encryption.service.js';
 
 interface CliArguments {
-  accountId: string;
+  olistAccountId: string;
+  marketplaceAccountId: string;
   date: string;
 }
 
@@ -24,28 +29,24 @@ async function main(): Promise<void> {
       logger: false,
     });
     const report = await application
-      .get(MercadoLivreMetricsReconciliationService)
-      .reconcile({
-        marketplaceAccountId: args.accountId,
+      .get(OlistOrdersInspectionService)
+      .inspect({
+        olistAccountId: args.olistAccountId,
+        marketplaceAccountId: args.marketplaceAccountId,
         date: args.date,
       });
-
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } catch (error: unknown) {
-    const safeErrors = [
-      CliArgumentError,
-      MercadoLivreMetricsReconciliationError,
-      MercadoLivreClientError,
-      MercadoLivreOAuthError,
-      MarketplaceAuthorizationNotFoundError,
-      TokenEncryptionError,
-    ];
-    const isSafeError = safeErrors.some(
-      (errorType) => error instanceof errorType,
-    );
-    const message = isSafeError
-      ? safeErrorMessage(error as Error)
-      : `Mercado Livre metrics reconciliation failed (${errorName(error)}).`;
+    const safe =
+      error instanceof CliArgumentError ||
+      error instanceof OlistOrdersInspectionError ||
+      error instanceof OlistOrdersClientError ||
+      error instanceof OlistAuthorizationNotFoundError ||
+      error instanceof OlistReauthorizationRequiredError ||
+      error instanceof TokenEncryptionError;
+    const message = safe
+      ? formatSafeError(error as Error)
+      : `Olist orders inspection failed (${errorName(error)}).`;
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
   } finally {
@@ -53,8 +54,8 @@ async function main(): Promise<void> {
   }
 }
 
-function safeErrorMessage(error: Error): string {
-  if (error instanceof MercadoLivreClientError) {
+function formatSafeError(error: Error): string {
+  if (error instanceof OlistOrdersClientError) {
     const status = error.statusCode ? `, HTTP ${error.statusCode}` : '';
     return `${error.message} (${error.code}${status})`;
   }
@@ -85,18 +86,18 @@ function parseArguments(args: string[]): CliArguments {
     }
     values.set(name, argument.slice(separator + 1));
   }
-
-  const accountId = values.get('account-id');
+  const olistAccountId = values.get('olist-account-id');
+  const marketplaceAccountId = values.get('marketplace-account-id');
   const date = values.get('date');
-  if (!accountId || !date || values.size !== 2) {
+  if (!olistAccountId || !marketplaceAccountId || !date || values.size !== 3) {
     throw usageError();
   }
-  return { accountId, date };
+  return { olistAccountId, marketplaceAccountId, date };
 }
 
 function usageError(): CliArgumentError {
   return new CliArgumentError(
-    'Usage: npm run reconcile:ml:metrics -- --account-id=<UUID> --date=YYYY-MM-DD',
+    'Usage: npm run inspect:olist:orders -- --olist-account-id=<UUID> --marketplace-account-id=<UUID> --date=YYYY-MM-DD',
   );
 }
 
