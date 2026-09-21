@@ -16,6 +16,7 @@
     "analytics:daily-sales": "npm run analytics:daily-sales --workspace=@ale-intelligence/api --",
     "ingest:ml:orders": "npm run ingest:ml:orders --workspace=@ale-intelligence/api --",
     "reconcile:ml:metrics": "npm run reconcile:ml:metrics --workspace=@ale-intelligence/api --",
+    "reconcile:seller-metrics": "npm run reconcile:seller-metrics --workspace=@ale-intelligence/api --",
     "inspect:olist:orders": "npm run inspect:olist:orders --workspace=@ale-intelligence/api --",
     "inspect:olist:only": "npm run inspect:olist:only --workspace=@ale-intelligence/api --",
     "inspect:gefinance-report": "npm run inspect:gefinance-report --workspace=@ale-intelligence/api --",
