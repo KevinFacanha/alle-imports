@@ -25,6 +25,39 @@ enum MarketplaceOrderStatus {
   UNKNOWN
 }
 
+enum DailySellerMetricName {
+  SALES_COUNT
+  UNITS_SOLD
+  GROSS_SALES
+  MARGIN_RATE
+  FULL_SALES_COUNT
+  FULL_UNITS_SOLD
+  FULL_GROSS_SALES
+  VISITS
+  AVERAGE_TICKET
+  CONVERSION_RATE
+}
+
+enum DailySellerMetricSource {
+  MERCADO_LIVRE
+  OLIST
+  GEFINANCE
+  DERIVED
+}
+
+enum DailySellerMetricStatus {
+  AVAILABLE
+  UNAVAILABLE
+  INCOMPATIBLE_SEMANTICS
+  PROVISIONAL
+}
+
+enum DailySellerMetricConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
 model Product {
   id           String                   @id @default(uuid()) @db.Uuid
   sku          String                   @unique(map: "products_sku_key")
@@ -39,19 +72,52 @@ model Product {
 }
 
 model MarketplaceAccount {
-  id                String                    @id @default(uuid()) @db.Uuid
-  marketplace       Marketplace
-  externalAccountId String                    @map("external_account_id")
-  name              String
-  active            Boolean                   @default(true)
-  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  authorization     MarketplaceAuthorization?
-  listings          MarketplaceListing[]
-  orders            MarketplaceOrder[]
+  id                 String                    @id @default(uuid()) @db.Uuid
+  marketplace        Marketplace
+  externalAccountId  String                    @map("external_account_id")
+  name               String
+  active             Boolean                   @default(true)
+  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  authorization      MarketplaceAuthorization?
+  listings           MarketplaceListing[]
+  orders             MarketplaceOrder[]
+  dailySellerMetrics DailySellerMetrics[]
 
   @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
   @@map("marketplace_accounts")
+}
+
+model DailySellerMetrics {
+  id                    String              @id @default(uuid()) @db.Uuid
+  marketplaceAccountId  String              @map("marketplace_account_id") @db.Uuid
+  businessDate          DateTime            @map("business_date") @db.Date
+  timezone              String
+  geFinanceReportSha256 String?             @map("gefinance_report_sha256") @db.Char(64)
+  calculatedAt          DateTime            @map("calculated_at") @db.Timestamptz(3)
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccount    MarketplaceAccount  @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "daily_seller_metrics_marketplace_account_id_fkey")
+  metrics               DailySellerMetric[]
+
+  @@unique([marketplaceAccountId, businessDate], map: "daily_seller_metrics_account_business_date_key")
+  @@index([businessDate], map: "daily_seller_metrics_business_date_idx")
+  @@map("daily_seller_metrics")
+}
+
+model DailySellerMetric {
+  id                   String                      @id @default(uuid()) @db.Uuid
+  dailySellerMetricsId String                      @map("daily_seller_metrics_id") @db.Uuid
+  name                 DailySellerMetricName
+  value                Decimal?                    @db.Decimal(30, 10)
+  source               DailySellerMetricSource
+  status               DailySellerMetricStatus
+  confidence           DailySellerMetricConfidence
+  validationEvidence   Json                        @map("validation_evidence") @db.JsonB
+  dailySellerMetrics   DailySellerMetrics          @relation(fields: [dailySellerMetricsId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "daily_seller_metric_daily_seller_metrics_id_fkey")
+
+  @@unique([dailySellerMetricsId, name], map: "daily_seller_metric_snapshot_name_key")
+  @@map("daily_seller_metric_values")
 }
 
 model MarketplaceAuthorization {
