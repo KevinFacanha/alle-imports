@@ -208,9 +208,38 @@ describe('Olist OAuth flow', () => {
         assert.equal(serialized.includes(ACCESS_TOKEN), false);
         assert.equal(serialized.includes(REFRESH_TOKEN), false);
         assert.equal(serialized.includes(CLIENT_SECRET), false);
+        assert.equal(serialized.includes('token_exchange'), true);
+        assert.equal(serialized.includes('400'), true);
+        assert.equal(serialized.includes('invalid_grant'), true);
         return true;
       },
     );
+  });
+
+  it('identifies an unauthorized /info request without leaking tokens', async () => {
+    const database = new OlistOAuthDatabaseFake();
+    const { service } = makeOAuthService(database, [
+      jsonResponse(tokenResponse()),
+      jsonResponse({ message: `unauthorized ${ACCESS_TOKEN}` }, 401),
+    ]);
+    const state = extractState(service.createAuthorizationUrl());
+
+    await assert.rejects(
+      service.handleCallback(state, 'authorization-code'),
+      (error: unknown) => {
+        assert.ok(error instanceof BadGatewayException);
+        const serialized = JSON.stringify(error.getResponse());
+        assert.equal(serialized.includes('account_info'), true);
+        assert.equal(serialized.includes('401'), true);
+        assert.equal(serialized.includes('request_failed'), true);
+        assert.equal(serialized.includes(ACCESS_TOKEN), false);
+        assert.equal(serialized.includes(REFRESH_TOKEN), false);
+        assert.equal(serialized.includes(CLIENT_SECRET), false);
+        return true;
+      },
+    );
+    assert.equal(database.accounts.length, 0);
+    assert.equal(database.authorizations.length, 0);
   });
 
   it('keeps two Olist accounts and authorizations isolated', async () => {

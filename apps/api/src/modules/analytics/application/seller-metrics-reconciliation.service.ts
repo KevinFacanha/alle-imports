@@ -114,6 +114,9 @@ export interface SellerMetricsReconciliationReport {
   }>;
 }
 
+export type SellerMetricsReconciliationResult =
+  SellerMetricsReconciliationReport;
+
 interface Candidate {
   source: SellerMetricSource;
   value: Prisma.Decimal | null;

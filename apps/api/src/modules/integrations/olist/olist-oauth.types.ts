@@ -18,10 +18,17 @@ export type OlistOAuthErrorCode =
   | 'REQUEST_FAILED'
   | 'TIMEOUT';
 
+export type OlistOAuthExternalStage =
+  | 'token_exchange'
+  | 'token_refresh'
+  | 'account_info';
+
 export class OlistOAuthError extends Error {
   constructor(
     readonly code: OlistOAuthErrorCode,
     message: string,
+    readonly stage: OlistOAuthExternalStage,
+    readonly externalStatus: number | null,
   ) {
     super(message);
     this.name = 'OlistOAuthError';

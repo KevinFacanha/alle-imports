@@ -5,6 +5,7 @@ import { EnvironmentVariables } from '../../../config/environment.validation.js'
 import {
   OlistAccountIdentity,
   OlistOAuthError,
+  OlistOAuthExternalStage,
   OlistTokenResponse,
 } from './olist-oauth.types.js';
 
@@ -43,46 +44,60 @@ export class OlistOAuthClient {
     code: string,
     codeVerifier: string,
   ): Promise<OlistTokenResponse> {
-    return this.requestToken({
-      grant_type: 'authorization_code',
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-      redirect_uri: this.redirectUri,
-      code,
-      code_verifier: codeVerifier,
-    });
+    return this.requestToken(
+      {
+        grant_type: 'authorization_code',
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        redirect_uri: this.redirectUri,
+        code,
+        code_verifier: codeVerifier,
+      },
+      'token_exchange',
+    );
   }
 
   refreshAccessToken(refreshToken: string): Promise<OlistTokenResponse> {
-    return this.requestToken({
-      grant_type: 'refresh_token',
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-      refresh_token: refreshToken,
-    });
+    return this.requestToken(
+      {
+        grant_type: 'refresh_token',
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        refresh_token: refreshToken,
+      },
+      'token_refresh',
+    );
   }
 
   async getAccountInfo(accessToken: string): Promise<OlistAccountIdentity> {
-    const response = await this.request(ACCOUNT_INFO_URL, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${accessToken}`,
+    const response = await this.request(
+      ACCOUNT_INFO_URL,
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
       },
-    });
+      'account_info',
+    );
 
     if (!response.ok) {
       throw new OlistOAuthError(
         'REQUEST_FAILED',
         'Olist rejected the account information request.',
+        'account_info',
+        response.status,
       );
     }
 
-    const body = await readJson(response);
+    const body = await readJson(response, 'account_info');
     if (!isRecord(body) || typeof body.cpfCnpj !== 'string') {
       throw new OlistOAuthError(
         'INVALID_RESPONSE',
         'Olist returned an unexpected account information response.',
+        'account_info',
+        response.status,
       );
     }
 
@@ -91,6 +106,8 @@ export class OlistOAuthClient {
       throw new OlistOAuthError(
         'INVALID_RESPONSE',
         'Olist returned an invalid account identifier.',
+        'account_info',
+        response.status,
       );
     }
 
@@ -103,16 +120,24 @@ export class OlistOAuthClient {
 
   private async requestToken(
     fields: Record<string, string>,
+    stage: Extract<
+      OlistOAuthExternalStage,
+      'token_exchange' | 'token_refresh'
+    >,
   ): Promise<OlistTokenResponse> {
-    const response = await this.request(TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
+    const response = await this.request(
+      TOKEN_URL,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams(fields),
       },
-      body: new URLSearchParams(fields),
-    });
-    const body = await readJson(response);
+      stage,
+    );
+    const body = await readJson(response, stage);
 
     if (!response.ok) {
       const errorCode =
@@ -124,6 +149,8 @@ export class OlistOAuthClient {
         errorCode === 'INVALID_GRANT'
           ? 'Olist authorization grant is invalid or expired.'
           : 'Olist rejected the token request.',
+        stage,
+        response.status,
       );
     }
 
@@ -131,6 +158,8 @@ export class OlistOAuthClient {
       throw new OlistOAuthError(
         'INVALID_RESPONSE',
         'Olist returned an unexpected token response.',
+        stage,
+        response.status,
       );
     }
 
@@ -150,7 +179,11 @@ export class OlistOAuthClient {
     };
   }
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
+  private async request(
+    url: string,
+    init: RequestInit,
+    stage: OlistOAuthExternalStage,
+  ): Promise<Response> {
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), this.timeoutMs);
 
@@ -161,10 +194,20 @@ export class OlistOAuthClient {
       });
     } catch (error: unknown) {
       if (isAbortError(error)) {
-        throw new OlistOAuthError('TIMEOUT', 'Olist request timed out.');
+        throw new OlistOAuthError(
+          'TIMEOUT',
+          'Olist request timed out.',
+          stage,
+          null,
+        );
       }
 
-      throw new OlistOAuthError('REQUEST_FAILED', 'Olist request failed.');
+      throw new OlistOAuthError(
+        'REQUEST_FAILED',
+        'Olist request failed.',
+        stage,
+        null,
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -183,13 +226,18 @@ export class OlistOAuthClient {
   }
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function readJson(
+  response: Response,
+  stage: OlistOAuthExternalStage,
+): Promise<unknown> {
   try {
     return await response.json();
   } catch {
     throw new OlistOAuthError(
       'INVALID_RESPONSE',
       'Olist returned an invalid JSON response.',
+      stage,
+      response.status,
     );
   }
 }
