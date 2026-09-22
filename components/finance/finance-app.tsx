@@ -15,8 +15,8 @@ import { initialChatMessages, mockAssistantResponse } from "@/mocks/chat-message
 import type { ChatMessage } from "@/types/chat-messages"
 import type { View } from "@/types/navigation"
 
-export function FinanceApp() {
-  const [view, setView] = useState<View>("assistente")
+export function FinanceApp({ initialView = "assistente" }: { initialView?: View }) {
+  const [view, setView] = useState<View>(initialView)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<ChatMessage[]>(initialChatMessages)

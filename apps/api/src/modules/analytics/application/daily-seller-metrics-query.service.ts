@@ -78,6 +78,12 @@ export interface DailySellerMetricsRangeResponse {
   days: DailySellerMetricsResponse[];
 }
 
+export interface MarketplaceAccountSummaryResponse {
+  id: string;
+  name: string;
+  marketplace: string;
+}
+
 const snapshotSelection = Prisma.validator<Prisma.DailySellerMetricsSelect>()({
   marketplaceAccountId: true,
   businessDate: true,
@@ -102,6 +108,18 @@ type PersistedSnapshot = Prisma.DailySellerMetricsGetPayload<{
 @Injectable()
 export class DailySellerMetricsQueryService {
   constructor(private readonly database: DatabaseService) {}
+
+  findActiveAccounts(): Promise<MarketplaceAccountSummaryResponse[]> {
+    return this.database.marketplaceAccount.findMany({
+      where: { active: true },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        marketplace: true,
+      },
+    });
+  }
 
   async findDaily(
     marketplaceAccountId: string,

@@ -19,6 +19,27 @@ const ACCOUNT_ID = '00000000-0000-4000-8000-000000000002';
 const OTHER_ACCOUNT_ID = '00000000-0000-4000-8000-000000000003';
 
 describe('DailySellerMetricsQueryService', () => {
+  it('returns only active accounts without credentials or external identifiers', async () => {
+    const database = new QueryDatabase([]);
+
+    const result = await service(database).findActiveAccounts();
+
+    assert.deepEqual(result, [
+      {
+        id: ACCOUNT_ID,
+        name: 'Conta 2',
+        marketplace: 'MERCADO_LIVRE',
+      },
+      {
+        id: OTHER_ACCOUNT_ID,
+        name: 'Conta 3',
+        marketplace: 'SHOPEE',
+      },
+    ]);
+    assert.equal(JSON.stringify(result).includes('externalAccountId'), false);
+    assert.equal(JSON.stringify(result).includes('token'), false);
+  });
+
   it('rejects invalid UUIDs and invalid date-only query values', async () => {
     const daily = Object.assign(new DailySellerMetricsQueryDto(), {
       marketplaceAccountId: 'not-an-uuid',
@@ -251,6 +272,12 @@ class QueryDatabase {
   }
 
   marketplaceAccount = {
+    findMany: async () =>
+      [...this.accounts].map((id, index) => ({
+        id,
+        name: index === 0 ? 'Conta 2' : 'Conta 3',
+        marketplace: index === 0 ? 'MERCADO_LIVRE' : 'SHOPEE',
+      })),
     findUnique: async ({ where }: { where: { id: string } }) =>
       this.accounts.has(where.id) ? { id: where.id } : null,
   };
