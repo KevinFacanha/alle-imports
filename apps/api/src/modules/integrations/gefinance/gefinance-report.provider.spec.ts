@@ -132,6 +132,81 @@ describe('GeFinanceReportProvider', () => {
     assertDecimal(summary.aggregateMargin.rate, '0.059');
   });
 
+  it('separates a multi-day XLSX and calculates margin and Full evidence per day', async () => {
+    const file = await reportFile([
+      row({
+        soldOn: '15/09/2026',
+        orderReference: 'DAY-15-STANDARD',
+        totalProductsSoldAmount: '100,10',
+        totalSaleAmount: '100,10',
+        marginAmount: '10,01',
+      }),
+      row({
+        soldOn: '16/09/2026',
+        orderReference: 'DAY-16-FULL',
+        channel: 'Mercado Livre Fulfillment C2',
+        totalProductsSoldAmount: '33,30',
+        totalSaleAmount: '40,00',
+        marginAmount: '3,33',
+      }),
+    ]);
+    const provider = new GeFinanceReportProvider(file);
+
+    const day15 = summarizeFinancialEvidence(
+      await provider.getFinancialEvidence({ date: '2026-09-15' }),
+    );
+    const day16 = summarizeFinancialEvidence(
+      await provider.getFinancialEvidence({ date: '2026-09-16' }),
+    );
+    const dayWithoutRows = summarizeFinancialEvidence(
+      await provider.getFinancialEvidence({ date: '2026-09-14' }),
+    );
+
+    assert.equal(day15.recordCount, 1);
+    assert.equal(day15.financialFullIndicators.records, 0);
+    assertDecimal(day15.aggregateMargin.rate, '0.1');
+    assert.equal(day16.recordCount, 1);
+    assert.equal(day16.financialFullIndicators.records, 1);
+    assertDecimal(day16.totals.totalSaleAmount, '40');
+    assertDecimal(day16.aggregateMargin.rate, '0.1');
+    assert.equal(dayWithoutRows.recordCount, 0);
+    assert.equal(dayWithoutRows.aggregateMargin.rate, null);
+    assert.ok(dayWithoutRows.totals.totalSaleAmount instanceof Prisma.Decimal);
+    assert.equal(dayWithoutRows.totals.totalSaleAmount.toString(), '0');
+  });
+
+  it('inspects the complete report period, record count and channels in one validated load', async () => {
+    const file = await reportFile([
+      row({ soldOn: '22/09/2026', orderReference: 'LAST' }),
+      row({ soldOn: '01/09/2026', orderReference: 'FIRST' }),
+      row({
+        soldOn: '01/09/2026',
+        orderReference: 'FULL',
+        channel: 'Mercado Livre Fulfillment C2',
+      }),
+    ]);
+
+    const inspection = await new GeFinanceReportProvider(file).inspectReport();
+
+    assert.deepEqual(inspection, {
+      from: '2026-09-01',
+      to: '2026-09-22',
+      recordCount: 3,
+      channels: [
+        {
+          original: 'Mercado Livre Fulfillment C2',
+          normalized: 'MERCADO_LIVRE_FULFILLMENT_C2',
+          recordCount: 1,
+        },
+        {
+          original: 'ML_ALEIMMPORTS 2',
+          normalized: 'MERCADO_LIVRE_ACCOUNT_2',
+          recordCount: 2,
+        },
+      ],
+    });
+  });
+
   it('preserves original channels and normalizes multiple known channels', async () => {
     const file = await reportFile([
       row({ channel: 'ML_ALEIMMPORTS 2', orderReference: 'ORDER-1' }),

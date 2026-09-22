@@ -3,8 +3,10 @@ import { Module } from '@nestjs/common';
 import { OlistModule } from '../integrations/olist/olist.module.js';
 import { MercadoLivreModule } from '../marketplaces/mercado-livre/mercado-livre.module.js';
 import { DailySalesSummaryService } from './application/daily-sales-summary.service.js';
+import { DailySellerMetricsBackfillService } from './application/daily-seller-metrics-backfill.service.js';
 import { DailySellerMetricsPersistenceService } from './application/daily-seller-metrics-persistence.service.js';
 import { DailySellerMetricsQueryService } from './application/daily-seller-metrics-query.service.js';
+import { GeFinanceImportService } from './application/gefinance-import.service.js';
 import { MercadoLivreMetricsReconciliationService } from './application/mercado-livre-metrics-reconciliation.service.js';
 import { SellerBiMetricResolver } from './application/seller-bi-metric.resolver.js';
 import {
@@ -19,8 +21,10 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
   controllers: [SellerMetricsController],
   providers: [
     DailySalesSummaryService,
+    DailySellerMetricsBackfillService,
     DailySellerMetricsPersistenceService,
     DailySellerMetricsQueryService,
+    GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
     SellerBiMetricResolver,
     SellerMetricsReconciliationService,
@@ -31,7 +35,9 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
   ],
   exports: [
     DailySalesSummaryService,
+    DailySellerMetricsBackfillService,
     DailySellerMetricsPersistenceService,
+    GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
     SellerBiMetricResolver,
     SellerMetricsReconciliationService,

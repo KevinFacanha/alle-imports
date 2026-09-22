@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { summarizeFinancialEvidence } from '../../finance/application/financial-evidence-summary.js';
+import { FinancialEvidenceProvider } from '../../finance/domain/financial-evidence.provider.js';
 import { FinancialEvidenceReport } from '../../finance/domain/financial-evidence.types.js';
 import { GeFinanceReportProvider } from '../../integrations/gefinance/gefinance-report.provider.js';
 import {
@@ -69,6 +70,7 @@ export interface SellerMetricsReconciliationParams {
   olistAccountId: string;
   date: string;
   geFinanceReportPath: string;
+  geFinanceProvider?: FinancialEvidenceProvider;
 }
 
 export interface SellerMetricsReconciliationReport {
@@ -143,9 +145,12 @@ export class SellerMetricsReconciliationService {
       olistAccountId: params.olistAccountId,
       date: params.date,
     });
-    const unfilteredFinancial = await this.geFinanceProviderFactory(
-      params.geFinanceReportPath,
-    ).getFinancialEvidence({ date: params.date });
+    const geFinanceProvider =
+      params.geFinanceProvider ??
+      this.geFinanceProviderFactory(params.geFinanceReportPath);
+    const unfilteredFinancial = await geFinanceProvider.getFinancialEvidence({
+      date: params.date,
+    });
     const financial = filterAccount2FinancialEvidence(unfilteredFinancial);
     const fullFinancial = filterFullFinancialEvidence(financial);
     const financialSummary = summarizeFinancialEvidence(financial);

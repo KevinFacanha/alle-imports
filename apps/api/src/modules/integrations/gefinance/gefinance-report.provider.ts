@@ -59,6 +59,23 @@ const CHANNEL_CODES: Readonly<Record<string, FinancialChannelCode>> = {
   [FINANCIAL_FULL_CHANNEL]: 'MERCADO_LIVRE_FULFILLMENT_C2',
 };
 
+export interface GeFinanceReportInspection {
+  from: string;
+  to: string;
+  recordCount: number;
+  channels: Array<{
+    original: string;
+    normalized: FinancialChannelCode;
+    recordCount: number;
+  }>;
+}
+
+interface LoadedGeFinanceReport {
+  source: 'GEFINANCE_REPORT';
+  recordsByDate: ReadonlyMap<string, readonly FinancialEvidenceRecord[]>;
+  marginDefinition: FinancialEvidenceReport['marginDefinition'];
+}
+
 export type GeFinanceReportErrorCode =
   | 'INVALID_EXTENSION'
   | 'FILE_NOT_FOUND'
@@ -87,12 +104,60 @@ export class GeFinanceReportError extends Error {
  * returns columns outside the financial evidence allowlist above.
  */
 export class GeFinanceReportProvider implements FinancialEvidenceProvider {
+  private reportPromise?: Promise<LoadedGeFinanceReport>;
+
   constructor(private readonly reportPath: string) {}
 
   async getFinancialEvidence(params: {
     date: string;
   }): Promise<FinancialEvidenceReport> {
     validateIsoDate(params.date);
+    const report = await (this.reportPromise ??= this.loadReport());
+
+    return {
+      source: report.source,
+      date: params.date,
+      records: [...(report.recordsByDate.get(params.date) ?? [])],
+      marginDefinition: report.marginDefinition,
+    };
+  }
+
+  async inspectReport(): Promise<GeFinanceReportInspection> {
+    const report = await (this.reportPromise ??= this.loadReport());
+    const dates = [...report.recordsByDate.keys()].sort();
+    const channels = new Map<
+      string,
+      GeFinanceReportInspection['channels'][number]
+    >();
+    let recordCount = 0;
+
+    for (const records of report.recordsByDate.values()) {
+      recordCount += records.length;
+      for (const record of records) {
+        const key = `${record.channel.normalized}\u0000${record.channel.original}`;
+        const existing = channels.get(key);
+        if (existing) {
+          existing.recordCount += 1;
+        } else {
+          channels.set(key, {
+            ...record.channel,
+            recordCount: 1,
+          });
+        }
+      }
+    }
+
+    return {
+      from: dates[0]!,
+      to: dates.at(-1)!,
+      recordCount,
+      channels: [...channels.values()].sort((left, right) =>
+        left.original.localeCompare(right.original, 'pt-BR'),
+      ),
+    };
+  }
+
+  private async loadReport(): Promise<LoadedGeFinanceReport> {
     await validateFile(this.reportPath);
 
     let workbook: WorkBook;
@@ -121,7 +186,7 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
     }
 
     const selected = selectWorksheet(workbook);
-    const records: FinancialEvidenceRecord[] = [];
+    const recordsByDate = new Map<string, FinancialEvidenceRecord[]>();
     let sourceDataRows = 0;
 
     for (let rowNumber = 2; rowNumber <= selected.lastRow; rowNumber += 1) {
@@ -130,9 +195,9 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
       }
       sourceDataRows += 1;
       const record = mapRow(selected.worksheet, rowNumber, selected.columns);
-      if (record.soldOn === params.date) {
-        records.push(record);
-      }
+      const records = recordsByDate.get(record.soldOn) ?? [];
+      records.push(record);
+      recordsByDate.set(record.soldOn, records);
     }
 
     if (sourceDataRows === 0) {
@@ -144,8 +209,7 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
 
     return {
       source: 'GEFINANCE_REPORT',
-      date: params.date,
-      records,
+      recordsByDate,
       marginDefinition: {
         amountColumn: GEFINANCE_REPORT_COLUMN_NAMES.marginAmount,
         baseColumn: GEFINANCE_REPORT_COLUMN_NAMES.totalProductsSoldAmount,
