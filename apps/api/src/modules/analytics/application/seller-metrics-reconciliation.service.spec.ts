@@ -120,9 +120,12 @@ describe('SellerMetricsReconciliationService', () => {
       new InspectionFake(reportData) as never,
       new VisitsClientFake(
         new MercadoLivreClientError(
-          'Mercado Livre rejected the visits request.',
-          'REQUEST_FAILED',
+          'Mercado Livre denied access to the visits resource.',
+          'ACCESS_DENIED',
           403,
+          undefined,
+          'PA_UNAUTHORIZED_RESULT_FROM_POLICIES',
+          'PolicyAgent',
         ),
       ) as never,
       () => new FinancialProviderFake([]),
@@ -138,6 +141,7 @@ describe('SellerMetricsReconciliationService', () => {
     const visits = metric(report.general, 'visits', 'MERCADO_LIVRE_OFFICIAL');
     assert.equal(visits.status, 'UNAVAILABLE');
     assert.match(visits.notes, /^ACCESS_DENIED:/);
+    assert.match(visits.notes, /PA_UNAUTHORIZED_RESULT_FROM_POLICIES/);
     assert.equal(visits.value, null);
     assert.equal(metric(report.full.evidence, 'salesCount', 'MERCADO_LIVRE_OFFICIAL').status, 'UNAVAILABLE');
     assert.equal(metric(report.full.evidence, 'unitsSold', 'MERCADO_LIVRE_OFFICIAL').status, 'UNAVAILABLE');

@@ -210,7 +210,17 @@ describe('MercadoLivreMetricsReconciliationService', () => {
     const database = new ReconciliationDatabaseFake([storedOrder()]);
     const calls: Array<{ url: URL; init: RequestInit }> = [];
     const client = makeHttpClient(
-      [jsonResponse({}, 403), jsonResponse({}, 403)],
+      [
+        jsonResponse(
+          {
+            code: 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES',
+            blocked_by: 'PolicyAgent',
+            message: `must not leak ${ACCESS_TOKEN}`,
+          },
+          403,
+        ),
+        jsonResponse({}, 403),
+      ],
       calls,
     );
 
@@ -221,16 +231,19 @@ describe('MercadoLivreMetricsReconciliationService', () => {
 
     assert.deepEqual(report.visits.api, {
       status: 'UNAVAILABLE',
-      errorCode: 'REQUEST_FAILED',
+      errorCode: 'ACCESS_DENIED',
       httpStatus: 403,
-      message: 'Mercado Livre rejected the visits request.',
+      upstreamCode: 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES',
+      blockedBy: 'PolicyAgent',
+      message: 'Mercado Livre denied access to the visits resource.',
     });
     assert.equal(report.visits.totalVisits, null);
     assert.deepEqual(report.full.api, {
       status: 'UNAVAILABLE',
-      errorCode: 'REQUEST_FAILED',
+      errorCode: 'ACCESS_DENIED',
       httpStatus: 403,
-      message: 'Mercado Livre rejected the order shipments request.',
+      message:
+        'Mercado Livre denied access to the order shipments resource.',
     });
     assert.equal(report.full.fullOrders, null);
     assert.equal(
@@ -299,6 +312,42 @@ describe('MercadoLivreClient metrics resources', () => {
       (error: unknown) => {
         assert.ok(error instanceof MercadoLivreClientError);
         assert.equal(error.code, 'UNAUTHORIZED');
+        assert.equal(JSON.stringify(error).includes(ACCESS_TOKEN), false);
+        assert.equal(error.message.includes(ACCESS_TOKEN), false);
+        return true;
+      },
+    );
+  });
+
+  it('keeps only allowlisted 403 diagnostics and never exposes the upstream message', async () => {
+    const calls: Array<{ url: URL; init: RequestInit }> = [];
+    const client = makeHttpClient(
+      [
+        jsonResponse(
+          {
+            code: 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES',
+            blocked_by: 'PolicyAgent',
+            message: `sensitive ${ACCESS_TOKEN}`,
+          },
+          403,
+        ),
+      ],
+      calls,
+    );
+
+    await assert.rejects(
+      client.getUserVisits('123', '2026-09-16', '2026-09-17', {
+        id: ACCOUNT_ID,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof MercadoLivreClientError);
+        assert.equal(error.code, 'ACCESS_DENIED');
+        assert.equal(error.statusCode, 403);
+        assert.equal(
+          error.upstreamCode,
+          'PA_UNAUTHORIZED_RESULT_FROM_POLICIES',
+        );
+        assert.equal(error.blockedBy, 'PolicyAgent');
         assert.equal(JSON.stringify(error).includes(ACCESS_TOKEN), false);
         assert.equal(error.message.includes(ACCESS_TOKEN), false);
         return true;

@@ -49,6 +49,8 @@ export interface OfficialApiAvailability {
   status: 'AVAILABLE' | 'UNAVAILABLE';
   errorCode?: string;
   httpStatus?: number;
+  upstreamCode?: string;
+  blockedBy?: string;
   message?: string;
 }
 
@@ -670,6 +672,10 @@ function availabilityOf(
         status: 'UNAVAILABLE',
         errorCode: error.code,
         ...(error.statusCode ? { httpStatus: error.statusCode } : {}),
+        ...(error.upstreamCode
+          ? { upstreamCode: error.upstreamCode }
+          : {}),
+        ...(error.blockedBy ? { blockedBy: error.blockedBy } : {}),
         message: error.message,
       }
     : { status: 'AVAILABLE' };
@@ -680,7 +686,8 @@ function officialApiFailureExplanation(
   error: MercadoLivreClientError,
 ): string {
   const status = error.statusCode ? ` HTTP ${error.statusCode}` : '';
-  return `A consulta oficial de ${resource} falhou (${error.code}${status}); nenhum corpo de resposta ou credencial foi registrado.`;
+  const upstream = error.upstreamCode ? `/${error.upstreamCode}` : '';
+  return `A consulta oficial de ${resource} falhou (${error.code}${upstream}${status}); nenhum corpo de resposta ou credencial foi registrado.`;
 }
 
 async function mapWithConcurrency<T, R>(

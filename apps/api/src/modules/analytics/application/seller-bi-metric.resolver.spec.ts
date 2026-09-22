@@ -108,7 +108,8 @@ describe('SellerBiMetricResolver', () => {
     visit.value = null;
     visit.status = 'UNAVAILABLE';
     visit.semantic = 'NO_EQUIVALENT_AVAILABLE';
-    visit.notes = 'ACCESS_DENIED: official ML visits (REQUEST_FAILED).';
+    visit.notes =
+      'ACCESS_DENIED: official ML visits (ACCESS_DENIED/PA_UNAUTHORIZED_RESULT_FROM_POLICIES).';
 
     const result = new SellerBiMetricResolver().resolve(input);
 
@@ -134,9 +135,28 @@ describe('SellerBiMetricResolver', () => {
 
     const result = new SellerBiMetricResolver().resolve(input);
 
-    assert.equal(result.metrics.conversionRate.value, '0.0011500863');
+    assert.equal(result.metrics.conversionRate.value, '0.1150086256');
     assert.equal(result.metrics.conversionRate.status, 'AVAILABLE');
     assert.equal(result.metrics.conversionRate.confidence, 'HIGH');
+    assert.notEqual(result.metrics.conversionRate.value, '0.1725129385');
+  });
+
+  it('keeps conversion unavailable when official visits are zero', () => {
+    const input = reconciliation();
+    const visit = input.general.find(
+      (row) =>
+        row.metric === 'visits' && row.source === 'MERCADO_LIVRE_OFFICIAL',
+    );
+    assert.ok(visit);
+    visit.value = 0;
+    visit.status = 'EXACT';
+
+    const result = new SellerBiMetricResolver().resolve(input);
+
+    assert.equal(result.metrics.visits.value, 0);
+    assert.equal(result.metrics.conversionRate.value, null);
+    assert.equal(result.metrics.conversionRate.source, 'DERIVED');
+    assert.equal(result.metrics.conversionRate.status, 'UNAVAILABLE');
   });
 
   it('does not use validation sources as fallback and keeps calls account-isolated', () => {

@@ -712,7 +712,12 @@ async function loadVisits(
           : 'UNAVAILABLE';
       return {
         value: null,
-        error: `${availability}: official ML visits (${error.code}).`,
+        error: `${availability}: official ML visits (${[
+          error.code,
+          error.upstreamCode,
+        ]
+          .filter(Boolean)
+          .join('/')}).`,
       };
     }
     throw error;

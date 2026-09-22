@@ -27,6 +27,7 @@ export interface MercadoLivreAccessTokenProvider {
 
 export type MercadoLivreClientErrorCode =
   | 'UNAUTHORIZED'
+  | 'ACCESS_DENIED'
   | 'RATE_LIMITED'
   | 'UPSTREAM_UNAVAILABLE'
   | 'REQUEST_FAILED'
@@ -39,6 +40,8 @@ export class MercadoLivreClientError extends Error {
     readonly code: MercadoLivreClientErrorCode,
     readonly statusCode?: number,
     readonly retryAfter?: string,
+    readonly upstreamCode?: string,
+    readonly blockedBy?: string,
   ) {
     super(message);
     this.name = 'MercadoLivreClientError';
@@ -106,6 +109,18 @@ export class MercadoLivreClient {
           'Mercado Livre is temporarily unavailable.',
           'UPSTREAM_UNAVAILABLE',
           response.status,
+        );
+      }
+
+      if (response.status === 403) {
+        const diagnostic = await readUpstreamErrorDiagnostic(response);
+        throw new MercadoLivreClientError(
+          'Mercado Livre denied access to the orders resource.',
+          'ACCESS_DENIED',
+          response.status,
+          undefined,
+          diagnostic.upstreamCode,
+          diagnostic.blockedBy,
         );
       }
 
@@ -261,6 +276,17 @@ export class MercadoLivreClient {
           response.status,
         );
       }
+      if (response.status === 403) {
+        const diagnostic = await readUpstreamErrorDiagnostic(response);
+        throw new MercadoLivreClientError(
+          `Mercado Livre denied access to the ${resourceName} resource.`,
+          'ACCESS_DENIED',
+          response.status,
+          undefined,
+          diagnostic.upstreamCode,
+          diagnostic.blockedBy,
+        );
+      }
       if (!response.ok) {
         throw new MercadoLivreClientError(
           `Mercado Livre rejected the ${resourceName} request.`,
@@ -360,4 +386,34 @@ function isAbortError(error: unknown): boolean {
     error instanceof Error &&
     (error.name === 'AbortError' || error.name === 'TimeoutError')
   );
+}
+
+interface UpstreamErrorDiagnostic {
+  upstreamCode?: string;
+  blockedBy?: string;
+}
+
+async function readUpstreamErrorDiagnostic(
+  response: Response,
+): Promise<UpstreamErrorDiagnostic> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return {};
+  }
+  if (!isRecord(body)) return {};
+
+  const upstreamCode = safeDiagnosticIdentifier(body.code ?? body.error);
+  const blockedBy = safeDiagnosticIdentifier(body.blocked_by);
+  return {
+    ...(upstreamCode ? { upstreamCode } : {}),
+    ...(blockedBy ? { blockedBy } : {}),
+  };
+}
+
+function safeDiagnosticIdentifier(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(value)
+    ? value
+    : undefined;
 }

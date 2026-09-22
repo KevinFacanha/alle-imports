@@ -185,12 +185,15 @@ const POLICY: Readonly<
   },
   conversionRate: {
     primarySource: 'DERIVED',
-    primarySemantic: 'salesCount / visits',
+    primarySemantic: 'salesCount / visits * 100',
     resolvedStatus: 'AVAILABLE',
     confidence: 'HIGH',
     evidence: [],
-    formula: 'salesCount / visits',
-    notes: ['Sem visitas disponíveis, a conversão permanece indisponível.'],
+    formula: 'salesCount / visits * 100',
+    notes: [
+      'Percentual derivado de Quantidade de vendas (salesCount), nunca de Unidades vendidas.',
+      'Sem visitas disponíveis ou com visitas iguais a zero, a conversão permanece indisponível.',
+    ],
   },
 };
 

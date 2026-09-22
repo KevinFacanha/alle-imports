@@ -213,7 +213,7 @@ function resolved(): ResolvedSellerBiMetrics {
         status: 'PROVISIONAL',
         confidence: 'MEDIUM',
       }),
-      conversionRate: metric('0.002', { source: 'DERIVED' }),
+      conversionRate: metric('0.2', { source: 'DERIVED' }),
     },
   };
 }

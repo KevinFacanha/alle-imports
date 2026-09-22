@@ -79,7 +79,7 @@ export class SellerBiMetricResolver {
       salesCount,
       visits,
       (sales, visitCount) =>
-        sales.dividedBy(visitCount).toDecimalPlaces(10).toString(),
+        sales.mul(100).dividedBy(visitCount).toDecimalPlaces(10).toString(),
     );
     const fullClassificationPolicy = this.policy.get('fullClassification');
 
