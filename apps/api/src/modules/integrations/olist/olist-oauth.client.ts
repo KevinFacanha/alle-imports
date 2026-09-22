@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
-import { EnvironmentVariables } from '../../../config/environment.validation.js';
+import { OlistIntegrationCredentials } from './olist-integration-config.service.js';
 import {
   OlistAccountIdentity,
   OlistOAuthError,
@@ -21,18 +20,21 @@ export const OLIST_OAUTH_TIMEOUT_MS = Symbol('OLIST_OAUTH_TIMEOUT_MS');
 @Injectable()
 export class OlistOAuthClient {
   constructor(
-    private readonly config: ConfigService<EnvironmentVariables, true>,
     @Inject(OLIST_OAUTH_FETCH)
     private readonly fetchImplementation: typeof fetch,
     @Inject(OLIST_OAUTH_TIMEOUT_MS)
     private readonly timeoutMs: number,
   ) {}
 
-  createAuthorizationUrl(state: string, codeChallenge: string): string {
+  createAuthorizationUrl(
+    credentials: OlistIntegrationCredentials,
+    state: string,
+    codeChallenge: string,
+  ): string {
     const url = new URL(AUTHORIZATION_URL);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('client_id', this.clientId);
-    url.searchParams.set('redirect_uri', this.redirectUri);
+    url.searchParams.set('client_id', credentials.clientId);
+    url.searchParams.set('redirect_uri', credentials.redirectUri);
     url.searchParams.set('scope', 'openid');
     url.searchParams.set('state', state);
     url.searchParams.set('code_challenge', codeChallenge);
@@ -41,15 +43,16 @@ export class OlistOAuthClient {
   }
 
   exchangeAuthorizationCode(
+    credentials: OlistIntegrationCredentials,
     code: string,
     codeVerifier: string,
   ): Promise<OlistTokenResponse> {
     return this.requestToken(
       {
         grant_type: 'authorization_code',
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        redirect_uri: this.redirectUri,
+        client_id: credentials.clientId,
+        client_secret: credentials.clientSecret,
+        redirect_uri: credentials.redirectUri,
         code,
         code_verifier: codeVerifier,
       },
@@ -57,12 +60,15 @@ export class OlistOAuthClient {
     );
   }
 
-  refreshAccessToken(refreshToken: string): Promise<OlistTokenResponse> {
+  refreshAccessToken(
+    credentials: OlistIntegrationCredentials,
+    refreshToken: string,
+  ): Promise<OlistTokenResponse> {
     return this.requestToken(
       {
         grant_type: 'refresh_token',
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
+        client_id: credentials.clientId,
+        client_secret: credentials.clientSecret,
         refresh_token: refreshToken,
       },
       'token_refresh',
@@ -213,17 +219,6 @@ export class OlistOAuthClient {
     }
   }
 
-  private get clientId(): string {
-    return this.config.getOrThrow('OLIST_CLIENT_ID');
-  }
-
-  private get clientSecret(): string {
-    return this.config.getOrThrow('OLIST_CLIENT_SECRET');
-  }
-
-  private get redirectUri(): string {
-    return this.config.getOrThrow('OLIST_REDIRECT_URI');
-  }
 }
 
 async function readJson(

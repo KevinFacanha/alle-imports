@@ -7,6 +7,7 @@ export type OAuthProvider = 'mercado-livre' | 'olist';
 
 interface PendingAuthorization {
   provider: OAuthProvider;
+  integrationKey: string | null;
   codeVerifier: string;
   expiresAt: number;
   expirationTimer: ReturnType<typeof setTimeout>;
@@ -17,6 +18,11 @@ export interface OAuthAuthorizationRequest {
   codeVerifier: string;
   codeChallenge: string;
   expiresAt: Date;
+}
+
+export interface ConsumedOAuthAuthorization {
+  codeVerifier: string;
+  integrationKey: string;
 }
 
 export class InvalidOAuthStateError extends Error {
@@ -33,6 +39,22 @@ export class OAuthStateStore {
   create(
     provider: OAuthProvider,
     now = Date.now(),
+  ): OAuthAuthorizationRequest {
+    return this.createPending(provider, null, now);
+  }
+
+  createBound(
+    provider: OAuthProvider,
+    integrationKey: string,
+    now = Date.now(),
+  ): OAuthAuthorizationRequest {
+    return this.createPending(provider, integrationKey, now);
+  }
+
+  private createPending(
+    provider: OAuthProvider,
+    integrationKey: string | null,
+    now: number,
   ): OAuthAuthorizationRequest {
     this.removeExpired(now);
 
@@ -53,6 +75,7 @@ export class OAuthStateStore {
 
     this.pending.set(state, {
       provider,
+      integrationKey,
       codeVerifier,
       expiresAt,
       expirationTimer,
@@ -71,6 +94,30 @@ export class OAuthStateStore {
     provider: OAuthProvider,
     now = Date.now(),
   ): string {
+    return this.consumePending(state, provider, now).codeVerifier;
+  }
+
+  consumeBound(
+    state: string,
+    provider: OAuthProvider,
+    now = Date.now(),
+  ): ConsumedOAuthAuthorization {
+    const authorization = this.consumePending(state, provider, now);
+    if (authorization.integrationKey === null) {
+      throw new InvalidOAuthStateError();
+    }
+
+    return {
+      codeVerifier: authorization.codeVerifier,
+      integrationKey: authorization.integrationKey,
+    };
+  }
+
+  private consumePending(
+    state: string,
+    provider: OAuthProvider,
+    now: number,
+  ): PendingAuthorization {
     const authorization = this.pending.get(state);
 
     // Delete first so every lookup, including an expired or mismatched one,
@@ -88,7 +135,7 @@ export class OAuthStateStore {
       throw new InvalidOAuthStateError();
     }
 
-    return authorization.codeVerifier;
+    return authorization;
   }
 
   private removeExpired(now: number): void {

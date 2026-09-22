@@ -11,9 +11,11 @@ export class OlistOAuthController {
 
   @Get('connect')
   @Redirect(undefined, 302)
-  connect(): { url: string; statusCode: number } {
+  connect(
+    @Query('integration') integrationKey?: string,
+  ): { url: string; statusCode: number } {
     return {
-      url: this.oauthService.createAuthorizationUrl(),
+      url: this.oauthService.createAuthorizationUrl(integrationKey),
       statusCode: 302,
     };
   }

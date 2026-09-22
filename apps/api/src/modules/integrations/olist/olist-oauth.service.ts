@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
 } from '@nestjs/common';
@@ -11,6 +12,11 @@ import {
   OAuthStateStore,
 } from '../oauth/oauth-state.store.js';
 import { TokenEncryptionService } from '../oauth/token-encryption.service.js';
+import {
+  OlistIntegrationConfigService,
+  OlistIntegrationCredentials,
+  OlistIntegrationNotConfiguredError,
+} from './olist-integration-config.service.js';
 import { OlistOAuthClient } from './olist-oauth.client.js';
 import { OlistOAuthError } from './olist-oauth.types.js';
 
@@ -28,14 +34,20 @@ export class OlistOAuthService {
 
   constructor(
     private readonly stateStore: OAuthStateStore,
+    private readonly integrationConfig: OlistIntegrationConfigService,
     private readonly oauthClient: OlistOAuthClient,
     private readonly encryption: TokenEncryptionService,
     private readonly database: DatabaseService,
   ) {}
 
-  createAuthorizationUrl(): string {
-    const authorization = this.stateStore.create('olist');
+  createAuthorizationUrl(requestedIntegrationKey?: string): string {
+    const credentials = this.resolveIntegration(requestedIntegrationKey);
+    const authorization = this.stateStore.createBound(
+      'olist',
+      credentials.integrationKey,
+    );
     return this.oauthClient.createAuthorizationUrl(
+      credentials,
       authorization.state,
       authorization.codeChallenge,
     );
@@ -56,9 +68,12 @@ export class OlistOAuthService {
       throw new BadRequestException('OAuth state is required.');
     }
 
-    let codeVerifier: string;
+    let pendingAuthorization: {
+      codeVerifier: string;
+      integrationKey: string;
+    };
     try {
-      codeVerifier = this.stateStore.consume(state, 'olist');
+      pendingAuthorization = this.stateStore.consumeBound(state, 'olist');
     } catch (error: unknown) {
       if (error instanceof InvalidOAuthStateError) {
         this.logFailure(
@@ -71,6 +86,10 @@ export class OlistOAuthService {
       }
       throw error;
     }
+
+    const credentials = this.resolveIntegration(
+      pendingAuthorization.integrationKey,
+    );
 
     if (
       authorizationError !== undefined ||
@@ -95,8 +114,9 @@ export class OlistOAuthService {
     >;
     try {
       tokens = await this.oauthClient.exchangeAuthorizationCode(
+        credentials,
         code,
-        codeVerifier,
+        pendingAuthorization.codeVerifier,
       );
     } catch (error: unknown) {
       throw this.handleExternalError(error, 'token_exchange');
@@ -136,6 +156,36 @@ export class OlistOAuthService {
     let account: { id: string; name: string };
     try {
       account = await this.database.$transaction(async (transaction) => {
+        const authorizationForIntegration =
+          await transaction.olistAuthorization.findUnique({
+            where: { integrationKey: credentials.integrationKey },
+            include: { olistAccount: true },
+          });
+        if (
+          authorizationForIntegration !== null &&
+          authorizationForIntegration.olistAccount.externalAccountId !==
+            identity.externalAccountId
+        ) {
+          throw new ConflictException(
+            'Olist integration is already bound to a different account.',
+          );
+        }
+
+        const accountForIdentity = await transaction.olistAccount.findUnique({
+          where: { externalAccountId: identity.externalAccountId },
+          include: { authorization: true },
+        });
+        if (
+          accountForIdentity?.authorization !== null &&
+          accountForIdentity?.authorization !== undefined &&
+          accountForIdentity.authorization.integrationKey !==
+            credentials.integrationKey
+        ) {
+          throw new ConflictException(
+            'Olist account is already bound to a different integration.',
+          );
+        }
+
         const olistAccount = await transaction.olistAccount.upsert({
           where: { externalAccountId: identity.externalAccountId },
           create: {
@@ -149,26 +199,28 @@ export class OlistOAuthService {
           },
         });
 
-        await transaction.olistAuthorization.upsert({
-          where: { olistAccountId: olistAccount.id },
-          create: {
-            olistAccountId: olistAccount.id,
-            accessTokenEncrypted,
-            refreshTokenEncrypted,
-            tokenType: tokens.tokenType,
-            scope: tokens.scope,
-            expiresAt,
-            refreshExpiresAt,
-          },
-          update: {
-            accessTokenEncrypted,
-            refreshTokenEncrypted,
-            tokenType: tokens.tokenType,
-            scope: tokens.scope,
-            expiresAt,
-            refreshExpiresAt,
-          },
-        });
+        const authorizationData = {
+          accessTokenEncrypted,
+          refreshTokenEncrypted,
+          tokenType: tokens.tokenType,
+          scope: tokens.scope,
+          expiresAt,
+          refreshExpiresAt,
+        };
+        if (authorizationForIntegration === null) {
+          await transaction.olistAuthorization.create({
+            data: {
+              integrationKey: credentials.integrationKey,
+              olistAccountId: olistAccount.id,
+              ...authorizationData,
+            },
+          });
+        } else {
+          await transaction.olistAuthorization.update({
+            where: { integrationKey: credentials.integrationKey },
+            data: authorizationData,
+          });
+        }
 
         return olistAccount;
       });
@@ -236,6 +288,27 @@ export class OlistOAuthService {
           ? 'Olist authorization code is invalid or expired.'
           : 'Olist authorization could not be completed.',
     });
+  }
+
+  private resolveIntegration(
+    integrationKey?: string,
+  ): OlistIntegrationCredentials {
+    try {
+      return this.integrationConfig.resolve(integrationKey);
+    } catch (error: unknown) {
+      if (error instanceof OlistIntegrationNotConfiguredError) {
+        this.logFailure(
+          'configuration',
+          null,
+          'Olist integration is not configured.',
+          'integration_not_configured',
+        );
+        throw new BadRequestException(
+          'Olist integration is not configured.',
+        );
+      }
+      throw error;
+    }
   }
 
   private logFailure(

@@ -6,6 +6,10 @@ import { EnvironmentVariables } from '../../../config/environment.validation.js'
 import { DatabaseService } from '../../../database/database.service.js';
 import { TokenEncryptionService } from '../oauth/token-encryption.service.js';
 import {
+  OlistIntegrationConfigService,
+  OlistIntegrationCredentials,
+} from './olist-integration-config.service.js';
+import {
   OlistAuthorizationService,
   OlistReauthorizationRequiredError,
 } from './olist-authorization.service.js';
@@ -70,9 +74,11 @@ describe('OlistAuthorizationService', () => {
     const database = new AuthorizationDatabaseFake([
       storedAuthorization(encryption, ACCOUNT_A_ID, {
         refreshToken: 'refresh-a',
+        integrationKey: 'c1',
       }),
       storedAuthorization(encryption, ACCOUNT_B_ID, {
         refreshToken: 'refresh-b',
+        integrationKey: 'c2',
       }),
     ]);
     const oauth = new OAuthRefreshFake();
@@ -88,6 +94,7 @@ describe('OlistAuthorizationService', () => {
       'new-access-2',
     ]);
     assert.deepEqual(oauth.refreshCalls.sort(), ['refresh-a', 'refresh-b']);
+    assert.deepEqual(oauth.integrationKeys.sort(), ['c1', 'c2']);
     assert.notEqual(
       database.get(ACCOUNT_A_ID).accessTokenEncrypted,
       database.get(ACCOUNT_B_ID).accessTokenEncrypted,
@@ -113,6 +120,7 @@ describe('OlistAuthorizationService', () => {
 });
 
 interface StoredAuthorization {
+  integrationKey: string;
   olistAccountId: string;
   accessTokenEncrypted: string;
   refreshTokenEncrypted: string;
@@ -150,7 +158,7 @@ class AuthorizationDatabaseFake {
           ) ?? null,
         update: async (args: {
           where: { olistAccountId: string };
-          data: Omit<StoredAuthorization, 'olistAccountId'>;
+          data: Omit<StoredAuthorization, 'olistAccountId' | 'integrationKey'>;
         }): Promise<StoredAuthorization> => {
           const index = this.authorizations.findIndex(
             (authorization) =>
@@ -158,7 +166,7 @@ class AuthorizationDatabaseFake {
           );
           assert.ok(index >= 0);
           const updated = {
-            olistAccountId: args.where.olistAccountId,
+            ...this.authorizations[index]!,
             ...args.data,
           };
           this.authorizations[index] = updated;
@@ -171,8 +179,13 @@ class AuthorizationDatabaseFake {
 
 class OAuthRefreshFake {
   readonly refreshCalls: string[] = [];
+  readonly integrationKeys: string[] = [];
 
-  async refreshAccessToken(refreshToken: string) {
+  async refreshAccessToken(
+    credentials: OlistIntegrationCredentials,
+    refreshToken: string,
+  ) {
+    this.integrationKeys.push(credentials.integrationKey);
     this.refreshCalls.push(refreshToken);
     const suffix = this.refreshCalls.length;
     await Promise.resolve();
@@ -192,9 +205,13 @@ function makeService(
   encryption: TokenEncryptionService,
   oauth: OAuthRefreshFake,
 ): OlistAuthorizationService {
+  const config = makeConfig();
   return new OlistAuthorizationService(
     database as unknown as DatabaseService,
     encryption,
+    new OlistIntegrationConfigService(
+      config as unknown as ConfigService<Record<string, unknown>, false>,
+    ),
     oauth as unknown as OlistOAuthClient,
   );
 }
@@ -207,9 +224,11 @@ function storedAuthorization(
     refreshToken?: string;
     expiresAt?: Date;
     refreshExpiresAt?: Date | null;
+    integrationKey?: string;
   } = {},
 ): StoredAuthorization {
   return {
+    integrationKey: overrides.integrationKey ?? 'c2',
     olistAccountId,
     accessTokenEncrypted: encryption.encrypt(
       overrides.accessToken ?? CURRENT_ACCESS_TOKEN,
@@ -226,11 +245,24 @@ function storedAuthorization(
 }
 
 function makeEncryption(): TokenEncryptionService {
-  const values: Partial<Record<keyof EnvironmentVariables, string>> = {
+  return new TokenEncryptionService(makeConfig());
+}
+
+function makeConfig(): ConfigService<EnvironmentVariables, true> {
+  const values: Record<string, string> = {
     OAUTH_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString('base64'),
+    OLIST_INTEGRATION_KEYS: 'c1,c2',
+    OLIST_DEFAULT_INTEGRATION_KEY: 'c2',
+    OLIST_C1_CLIENT_ID: 'c1-client-id',
+    OLIST_C1_CLIENT_SECRET: 'c1-client-secret',
+    OLIST_C1_REDIRECT_URI: 'https://c1.example.test/callback',
+    OLIST_C2_CLIENT_ID: 'c2-client-id',
+    OLIST_C2_CLIENT_SECRET: 'c2-client-secret',
+    OLIST_C2_REDIRECT_URI: 'https://c2.example.test/callback',
   };
-  const config = {
-    getOrThrow: (key: keyof EnvironmentVariables) => {
+  return {
+    get: (key: string) => values[key],
+    getOrThrow: (key: string) => {
       const value = values[key];
       if (!value) {
         throw new Error(`Missing test config: ${key}`);
@@ -238,5 +270,4 @@ function makeEncryption(): TokenEncryptionService {
       return value;
     },
   } as unknown as ConfigService<EnvironmentVariables, true>;
-  return new TokenEncryptionService(config);
 }

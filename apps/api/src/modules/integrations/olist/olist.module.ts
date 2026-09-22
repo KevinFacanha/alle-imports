@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { MercadoLivreModule } from '../../marketplaces/mercado-livre/mercado-livre.module.js';
 import { OAuthSecurityModule } from '../oauth/oauth-security.module.js';
 import { OlistAuthorizationService } from './olist-authorization.service.js';
+import { OlistIntegrationConfigService } from './olist-integration-config.service.js';
 import {
   OLIST_OAUTH_FETCH,
   OLIST_OAUTH_TIMEOUT_MS,
@@ -23,6 +24,7 @@ import { OlistOrdersInspectionService } from './olist-orders-inspection.service.
   controllers: [OlistOAuthController],
   providers: [
     OlistOAuthClient,
+    OlistIntegrationConfigService,
     OlistOAuthService,
     OlistAuthorizationService,
     OlistOrdersClient,

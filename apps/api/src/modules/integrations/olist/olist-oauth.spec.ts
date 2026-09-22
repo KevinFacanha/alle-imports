@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
-import { BadGatewayException, BadRequestException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OlistAccount } from '@prisma/client';
 
@@ -9,14 +13,28 @@ import { EnvironmentVariables } from '../../../config/environment.validation.js'
 import { DatabaseService } from '../../../database/database.service.js';
 import { OAuthStateStore } from '../oauth/oauth-state.store.js';
 import { TokenEncryptionService } from '../oauth/token-encryption.service.js';
+import {
+  OlistIntegrationConfigService,
+  OlistIntegrationCredentials,
+  OlistIntegrationNotConfiguredError,
+} from './olist-integration-config.service.js';
 import { OlistOAuthClient } from './olist-oauth.client.js';
 import { OlistOAuthService } from './olist-oauth.service.js';
 
 const CLIENT_ID = 'olist-test-client-id';
 const CLIENT_SECRET = 'olist-test-client-secret';
 const REDIRECT_URI = 'https://example.test/api/v1/auth/olist/callback';
+const C1_CLIENT_ID = 'olist-c1-test-client-id';
+const C1_CLIENT_SECRET = 'olist-c1-test-client-secret';
+const C1_REDIRECT_URI = 'https://c1.example.test/api/v1/auth/olist/callback';
 const ACCESS_TOKEN = 'olist-secret-access-token';
 const REFRESH_TOKEN = 'olist-secret-refresh-token';
+const C2_CREDENTIALS: OlistIntegrationCredentials = {
+  integrationKey: 'c2',
+  clientId: CLIENT_ID,
+  clientSecret: CLIENT_SECRET,
+  redirectUri: REDIRECT_URI,
+};
 
 describe('Olist OAuth state', () => {
   it('generates an unpredictable state and an RFC 7636 S256 challenge', () => {
@@ -73,13 +91,64 @@ describe('Olist OAuth state', () => {
       store.consume(providerBound.state, 'mercado-livre'),
     );
   });
+
+  it('returns the integration binding only when consuming the state', () => {
+    const store = new OAuthStateStore();
+    const authorization = store.createBound('olist', 'c1');
+
+    assert.deepEqual(store.consumeBound(authorization.state, 'olist'), {
+      codeVerifier: authorization.codeVerifier,
+      integrationKey: 'c1',
+    });
+    assert.throws(() => store.consumeBound(authorization.state, 'olist'));
+  });
+});
+
+describe('Olist integration configuration', () => {
+  it('keeps the existing Conta 2 variables working as a legacy fallback', () => {
+    const resolver = makeIntegrationConfig({
+      OLIST_CLIENT_ID: CLIENT_ID,
+      OLIST_CLIENT_SECRET: CLIENT_SECRET,
+      OLIST_REDIRECT_URI: REDIRECT_URI,
+    });
+
+    assert.deepEqual(resolver.resolve(), C2_CREDENTIALS);
+  });
+
+  it('selects C1 and C2 credentials by configured integration key', () => {
+    const resolver = makeIntegrationConfig(integrationConfigValues());
+
+    assert.equal(resolver.resolve('c1').clientId, C1_CLIENT_ID);
+    assert.equal(resolver.resolve('c1').clientSecret, C1_CLIENT_SECRET);
+    assert.equal(resolver.resolve('c2').clientId, CLIENT_ID);
+    assert.equal(resolver.resolve('c2').clientSecret, CLIENT_SECRET);
+  });
+
+  it('rejects an unknown or incomplete integration without exposing secrets', () => {
+    const resolver = makeIntegrationConfig(integrationConfigValues());
+
+    assert.throws(
+      () => resolver.resolve('missing'),
+      (error: unknown) => {
+        assert.ok(error instanceof OlistIntegrationNotConfiguredError);
+        const serialized = JSON.stringify(error);
+        assert.equal(serialized.includes(CLIENT_SECRET), false);
+        assert.equal(serialized.includes(C1_CLIENT_SECRET), false);
+        return true;
+      },
+    );
+  });
 });
 
 describe('Olist OAuth flow', () => {
   it('builds the official authorization URL with state and PKCE', () => {
     const { oauthClient } = makeOAuthClient([]);
     const url = new URL(
-      oauthClient.createAuthorizationUrl('state-value', 'challenge-value'),
+      oauthClient.createAuthorizationUrl(
+        C2_CREDENTIALS,
+        'state-value',
+        'challenge-value',
+      ),
     );
 
     assert.equal(url.origin, 'https://accounts.tiny.com.br');
@@ -108,6 +177,44 @@ describe('Olist OAuth flow', () => {
     );
     await assert.rejects(
       service.handleCallback(state, 'code-after-retry'),
+      BadRequestException,
+    );
+    assert.equal(calls.length, 0);
+  });
+
+  it('recovers C1 from state and uses only its credentials in callback', async () => {
+    const database = new OlistOAuthDatabaseFake();
+    const { service, calls } = makeOAuthService(database, [
+      jsonResponse(tokenResponse()),
+      jsonResponse({
+        razaoSocial: 'Conta 1 Ltda',
+        cpfCnpj: '33.333.333/0001-91',
+      }),
+    ]);
+    const authorizationUrl = new URL(service.createAuthorizationUrl('c1'));
+    const state = authorizationUrl.searchParams.get('state');
+    assert.ok(state);
+    assert.equal(authorizationUrl.searchParams.get('client_id'), C1_CLIENT_ID);
+    assert.equal(
+      authorizationUrl.searchParams.get('redirect_uri'),
+      C1_REDIRECT_URI,
+    );
+
+    await service.handleCallback(state, 'c1-authorization-code');
+
+    const tokenBody = calls[0]?.init.body;
+    assert.ok(tokenBody instanceof URLSearchParams);
+    assert.equal(tokenBody.get('client_id'), C1_CLIENT_ID);
+    assert.equal(tokenBody.get('client_secret'), C1_CLIENT_SECRET);
+    assert.equal(database.authorizations[0]?.integrationKey, 'c1');
+  });
+
+  it('rejects an unconfigured integration before creating state or redirecting', () => {
+    const database = new OlistOAuthDatabaseFake();
+    const { service, calls } = makeOAuthService(database, []);
+
+    assert.throws(
+      () => service.createAuthorizationUrl('unknown'),
       BadRequestException,
     );
     assert.equal(calls.length, 0);
@@ -274,7 +381,7 @@ describe('Olist OAuth flow', () => {
       'code-a',
     );
     await second.service.handleCallback(
-      extractState(second.service.createAuthorizationUrl()),
+      extractState(second.service.createAuthorizationUrl('c1')),
       'code-b',
     );
 
@@ -285,12 +392,112 @@ describe('Olist OAuth flow', () => {
       ['11111111000191', '22222222000191'],
     );
     assert.equal(database.authorizations.length, 2);
+    assert.deepEqual(
+      database.authorizations
+        .map((authorization) => authorization.integrationKey)
+        .sort(),
+      ['c1', 'c2'],
+    );
     const decrypted = database.authorizations
       .map((authorization) =>
         first.encryption.decrypt(authorization.accessTokenEncrypted),
       )
       .sort();
     assert.deepEqual(decrypted, ['access-account-a', 'access-account-b']);
+  });
+
+  it('rejects a crossed callback and preserves the existing C2 authorization', async () => {
+    const database = new OlistOAuthDatabaseFake();
+    const first = makeOAuthService(database, [
+      jsonResponse(
+        tokenResponse({
+          access_token: 'access-c2-original',
+          refresh_token: 'refresh-c2-original',
+        }),
+      ),
+      jsonResponse({
+        razaoSocial: 'Conta 2 Ltda',
+        cpfCnpj: '44.444.444/0001-91',
+      }),
+    ]);
+    await first.service.handleCallback(
+      extractState(first.service.createAuthorizationUrl('c2')),
+      'code-c2',
+    );
+    const originalCiphertext =
+      database.authorizations[0]?.accessTokenEncrypted;
+
+    const crossed = makeOAuthService(database, [
+      jsonResponse(
+        tokenResponse({
+          access_token: 'crossed-access',
+          refresh_token: 'crossed-refresh',
+        }),
+      ),
+      jsonResponse({
+        razaoSocial: 'Outra conta Ltda',
+        cpfCnpj: '55.555.555/0001-91',
+      }),
+    ]);
+    const crossedState = extractState(
+      crossed.service.createAuthorizationUrl('c2'),
+    );
+
+    await assert.rejects(
+      crossed.service.handleCallback(crossedState, 'crossed-code'),
+      ConflictException,
+    );
+    assert.equal(database.accounts.length, 1);
+    assert.equal(database.authorizations.length, 1);
+    assert.equal(
+      database.authorizations[0]?.accessTokenEncrypted,
+      originalCiphertext,
+    );
+    assert.equal(
+      first.encryption.decrypt(
+        database.authorizations[0]!.accessTokenEncrypted,
+      ),
+      'access-c2-original',
+    );
+  });
+
+  it('does not allow C1 to overwrite an account already authorized by C2', async () => {
+    const database = new OlistOAuthDatabaseFake();
+    const c2 = makeOAuthService(database, [
+      jsonResponse(tokenResponse({ access_token: 'c2-access' })),
+      jsonResponse({
+        razaoSocial: 'Conta compartilhada Ltda',
+        cpfCnpj: '66.666.666/0001-91',
+      }),
+    ]);
+    await c2.service.handleCallback(
+      extractState(c2.service.createAuthorizationUrl('c2')),
+      'c2-code',
+    );
+
+    const c1 = makeOAuthService(database, [
+      jsonResponse(tokenResponse({ access_token: 'c1-access' })),
+      jsonResponse({
+        razaoSocial: 'Conta compartilhada Ltda',
+        cpfCnpj: '66.666.666/0001-91',
+      }),
+    ]);
+    await assert.rejects(
+      c1.service.handleCallback(
+        extractState(c1.service.createAuthorizationUrl('c1')),
+        'c1-code',
+      ),
+      ConflictException,
+    );
+
+    assert.equal(database.authorizations.length, 1);
+    assert.equal(database.authorizations[0]?.integrationKey, 'c2');
+    assert.equal(
+      c2.encryption.decrypt(
+        database.authorizations[0]!.accessTokenEncrypted,
+      ),
+      'c2-access',
+    );
   });
 });
 
@@ -300,6 +507,7 @@ interface FetchCall {
 }
 
 interface StoredAuthorization {
+  integrationKey: string;
   olistAccountId: string;
   accessTokenEncrypted: string;
   refreshTokenEncrypted: string;
@@ -320,6 +528,27 @@ class OlistOAuthDatabaseFake {
   private transactionClient(): object {
     return {
       olistAccount: {
+        findUnique: async (args: {
+          where: { externalAccountId: string };
+        }): Promise<
+          (OlistAccount & { authorization: StoredAuthorization | null }) | null
+        > => {
+          const account = this.accounts.find(
+            (candidate) =>
+              candidate.externalAccountId === args.where.externalAccountId,
+          );
+          if (!account) {
+            return null;
+          }
+          return {
+            ...account,
+            authorization:
+              this.authorizations.find(
+                (authorization) =>
+                  authorization.olistAccountId === account.id,
+              ) ?? null,
+          };
+        },
         upsert: async (args: {
           where: { externalAccountId: string };
           create: {
@@ -350,27 +579,45 @@ class OlistOAuthDatabaseFake {
         },
       },
       olistAuthorization: {
-        upsert: async (args: {
-          where: { olistAccountId: string };
-          create: StoredAuthorization;
-          update: Omit<StoredAuthorization, 'olistAccountId'>;
+        findUnique: async (args: {
+          where: { integrationKey: string };
+        }): Promise<
+          | (StoredAuthorization & { olistAccount: OlistAccount })
+          | null
+        > => {
+          const authorization = this.authorizations.find(
+            (candidate) =>
+              candidate.integrationKey === args.where.integrationKey,
+          );
+          if (!authorization) {
+            return null;
+          }
+          const account = this.accounts.find(
+            (candidate) => candidate.id === authorization.olistAccountId,
+          );
+          assert.ok(account);
+          return { ...authorization, olistAccount: account };
+        },
+        create: async (args: {
+          data: StoredAuthorization;
+        }): Promise<StoredAuthorization> => {
+          this.authorizations.push(args.data);
+          return args.data;
+        },
+        update: async (args: {
+          where: { integrationKey: string };
+          data: Omit<StoredAuthorization, 'integrationKey' | 'olistAccountId'>;
         }): Promise<StoredAuthorization> => {
           const existingIndex = this.authorizations.findIndex(
             (authorization) =>
-              authorization.olistAccountId === args.where.olistAccountId,
+              authorization.integrationKey === args.where.integrationKey,
           );
-          const authorization =
-            existingIndex >= 0
-              ? {
-                  olistAccountId: args.where.olistAccountId,
-                  ...args.update,
-                }
-              : args.create;
-          if (existingIndex >= 0) {
-            this.authorizations[existingIndex] = authorization;
-          } else {
-            this.authorizations.push(authorization);
-          }
+          assert.ok(existingIndex >= 0);
+          const authorization = {
+            ...this.authorizations[existingIndex]!,
+            ...args.data,
+          };
+          this.authorizations[existingIndex] = authorization;
           return authorization;
         },
       },
@@ -389,9 +636,13 @@ function makeOAuthService(
 } {
   const { oauthClient, calls, config } = makeOAuthClient(responses);
   const encryption = new TokenEncryptionService(config);
+  const integrationConfig = new OlistIntegrationConfigService(
+    config as unknown as ConfigService<Record<string, unknown>, false>,
+  );
   return {
     service: new OlistOAuthService(
       new OAuthStateStore(),
+      integrationConfig,
       oauthClient,
       encryption,
       database as unknown as DatabaseService,
@@ -424,28 +675,55 @@ function makeOAuthClient(responses: Response[]): {
   const config = makeConfig();
 
   return {
-    oauthClient: new OlistOAuthClient(config, fetchMock, 1_000),
+    oauthClient: new OlistOAuthClient(fetchMock, 1_000),
     calls,
     config,
   };
 }
 
 function makeConfig(): ConfigService<EnvironmentVariables, true> {
-  const values: Partial<Record<keyof EnvironmentVariables, string>> = {
-    OLIST_CLIENT_ID: CLIENT_ID,
-    OLIST_CLIENT_SECRET: CLIENT_SECRET,
-    OLIST_REDIRECT_URI: REDIRECT_URI,
+  const values: Record<string, string> = {
+    ...integrationConfigValues(),
     OAUTH_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64'),
   };
+  return makeConfigService(values) as unknown as ConfigService<
+    EnvironmentVariables,
+    true
+  >;
+}
+
+function integrationConfigValues(): Record<string, string> {
   return {
-    getOrThrow: (key: keyof EnvironmentVariables) => {
+    OLIST_INTEGRATION_KEYS: 'c1,c2',
+    OLIST_DEFAULT_INTEGRATION_KEY: 'c2',
+    OLIST_C2_CLIENT_ID: CLIENT_ID,
+    OLIST_C2_CLIENT_SECRET: CLIENT_SECRET,
+    OLIST_C2_REDIRECT_URI: REDIRECT_URI,
+    OLIST_C1_CLIENT_ID: C1_CLIENT_ID,
+    OLIST_C1_CLIENT_SECRET: C1_CLIENT_SECRET,
+    OLIST_C1_REDIRECT_URI: C1_REDIRECT_URI,
+  };
+}
+
+function makeIntegrationConfig(
+  values: Record<string, string>,
+): OlistIntegrationConfigService {
+  return new OlistIntegrationConfigService(makeConfigService(values));
+}
+
+function makeConfigService(
+  values: Record<string, string>,
+): ConfigService<Record<string, unknown>, false> {
+  return {
+    get: (key: string) => values[key],
+    getOrThrow: (key: string) => {
       const value = values[key];
       if (!value) {
         throw new Error(`Missing test config: ${key}`);
       }
       return value;
     },
-  } as unknown as ConfigService<EnvironmentVariables, true>;
+  } as unknown as ConfigService<Record<string, unknown>, false>;
 }
 
 function extractState(authorizationUrl: string): string {

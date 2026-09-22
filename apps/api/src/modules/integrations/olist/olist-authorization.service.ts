@@ -3,6 +3,7 @@ import { OlistAccount, Prisma } from '@prisma/client';
 
 import { DatabaseService } from '../../../database/database.service.js';
 import { TokenEncryptionService } from '../oauth/token-encryption.service.js';
+import { OlistIntegrationConfigService } from './olist-integration-config.service.js';
 import { OlistOAuthClient } from './olist-oauth.client.js';
 
 const EXPIRY_SKEW_MS = 60_000;
@@ -29,6 +30,7 @@ export class OlistAuthorizationService {
   constructor(
     private readonly database: DatabaseService,
     private readonly encryption: TokenEncryptionService,
+    private readonly integrationConfig: OlistIntegrationConfigService,
     private readonly oauthClient: OlistOAuthClient,
   ) {}
 
@@ -85,7 +87,11 @@ export class OlistAuthorizationService {
         const refreshToken = this.encryption.decrypt(
           authorization.refreshTokenEncrypted,
         );
+        const credentials = this.integrationConfig.resolve(
+          authorization.integrationKey,
+        );
         const refreshed = await this.oauthClient.refreshAccessToken(
+          credentials,
           refreshToken,
         );
         const refreshedAt = Date.now();

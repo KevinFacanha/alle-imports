@@ -149,6 +149,7 @@ model OlistAccount {
 
 model OlistAuthorization {
   id                    String       @id @default(uuid()) @db.Uuid
+  integrationKey        String       @unique(map: "olist_authorizations_integration_key_key") @map("integration_key")
   olistAccountId        String       @unique(map: "olist_authorizations_olist_account_id_key") @map("olist_account_id") @db.Uuid
   accessTokenEncrypted  String       @map("access_token_encrypted")
   refreshTokenEncrypted String       @map("refresh_token_encrypted")
