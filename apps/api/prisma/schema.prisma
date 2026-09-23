@@ -94,6 +94,7 @@ model DailySellerMetrics {
   businessDate          DateTime            @map("business_date") @db.Date
   timezone              String
   geFinanceReportSha256 String?             @map("gefinance_report_sha256") @db.Char(64)
+  geFinanceDailySha256  String?             @map("gefinance_daily_sha256") @db.Char(64)
   calculatedAt          DateTime            @map("calculated_at") @db.Timestamptz(3)
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { readFile as readBinaryFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
@@ -68,11 +69,18 @@ export interface GeFinanceReportInspection {
   from: string;
   to: string;
   recordCount: number;
+  days: GeFinanceReportDayInspection[];
   channels: Array<{
     original: string;
     normalized: FinancialChannelCode;
     recordCount: number;
   }>;
+}
+
+export interface GeFinanceReportDayInspection {
+  businessDate: string;
+  recordCount: number;
+  sha256: string;
 }
 
 interface LoadedGeFinanceReport {
@@ -156,6 +164,14 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
       from: dates[0]!,
       to: dates.at(-1)!,
       recordCount,
+      days: dates.map((businessDate) => {
+        const records = report.recordsByDate.get(businessDate)!;
+        return {
+          businessDate,
+          recordCount: records.length,
+          sha256: geFinanceDailySha256(records),
+        };
+      }),
       channels: [...channels.values()].sort((left, right) =>
         left.original.localeCompare(right.original, 'pt-BR'),
       ),
@@ -222,6 +238,49 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
       },
     };
   }
+}
+
+/**
+ * Hashes only the allowlisted financial/technical record fields. Canonical
+ * JSON rows are sorted so worksheet row order cannot affect the digest.
+ */
+export function geFinanceDailySha256(
+  records: readonly FinancialEvidenceRecord[],
+): string {
+  const canonicalRows = records.map(canonicalHashRow).sort();
+  return createHash('sha256')
+    .update(JSON.stringify(['gefinance-daily-v1', canonicalRows]), 'utf8')
+    .digest('hex');
+}
+
+function canonicalHashRow(record: FinancialEvidenceRecord): string {
+  return JSON.stringify([
+    record.soldOn,
+    record.orderReference,
+    record.channel.original,
+    record.channel.normalized,
+    record.status,
+    record.sku ?? null,
+    record.productName ?? null,
+    record.quantity ?? null,
+    canonicalDecimal(record.productSoldAmount),
+    canonicalDecimal(record.discountAmount),
+    canonicalDecimal(record.totalProductsSoldAmount),
+    canonicalDecimal(record.customerShippingAmount),
+    canonicalDecimal(record.totalSaleAmount),
+    canonicalDecimal(record.productCostAmount),
+    canonicalDecimal(record.feesAndCommissionsAmount),
+    canonicalDecimal(record.taxAmount),
+    canonicalDecimal(record.netAmount),
+    canonicalDecimal(record.marginAmount),
+    canonicalDecimal(record.reportedMarginRate),
+    canonicalDecimal(record.marginBaseAmount),
+    record.isFinancialFulfillmentEvidence,
+  ]);
+}
+
+function canonicalDecimal(value: Prisma.Decimal): string {
+  return value.isZero() ? '0' : value.toString();
 }
 
 async function validateFile(source: string): Promise<void> {

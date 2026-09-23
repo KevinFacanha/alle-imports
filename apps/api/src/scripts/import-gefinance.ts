@@ -30,7 +30,17 @@ async function main(): Promise<void> {
     });
     const result = await application
       .get(GeFinanceImportService)
-      .execute({ file, sha256 });
+      .execute({
+        file,
+        sha256,
+        onProgress: (progress) => {
+          if (progress.state === 'COMPLETED') {
+            process.stdout.write(
+              `[${progress.index}/${progress.total}] ${progress.date} ${progress.action}\n`,
+            );
+          }
+        },
+      });
 
     printResult(file, result);
     if (result.backfill.failed > 0) {
@@ -100,10 +110,12 @@ function printResult(file: string, result: GeFinanceImportResult): void {
       `integrationKey: ${olistAccount.integrationKey}`,
       `Período detectado: ${report.from} a ${report.to}`,
       `Registros GeFinance: ${report.recordCount}`,
-      `Dias processados: ${backfill.daysProcessed}`,
+      `Days found: ${backfill.daysFound}`,
+      `Skipped: ${backfill.skipped}`,
       `Created: ${backfill.created}`,
       `Updated: ${backfill.updated}`,
       `Failed: ${backfill.failed}`,
+      `External processing days: ${backfill.externalProcessingDays}`,
     ].join('\n')}\n`,
   );
 }

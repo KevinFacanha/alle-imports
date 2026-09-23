@@ -9,9 +9,11 @@ import {
   GeFinanceReportProvider,
 } from '../../integrations/gefinance/gefinance-report.provider.js';
 import {
+  DailySellerMetricsBackfillProgress,
   DailySellerMetricsBackfillService,
   DailySellerMetricsBackfillSummary,
 } from './daily-seller-metrics-backfill.service.js';
+import { GeFinanceDailyHashBackfillSummary } from './daily-seller-metrics-persistence.service.js';
 import {
   GEFINANCE_PROVIDER_FACTORY,
   GeFinanceProviderFactory,
@@ -33,6 +35,13 @@ export interface GeFinanceImportResult {
   backfill: DailySellerMetricsBackfillSummary;
 }
 
+export interface GeFinanceDailyHashBackfillResult {
+  report: GeFinanceReportInspection;
+  marketplaceAccount: { id: string; name: string };
+  olistAccount: { id: string; name: string; integrationKey: string };
+  backfill: GeFinanceDailyHashBackfillSummary;
+}
+
 export class GeFinanceImportError extends Error {
   constructor(message: string) {
     super(message);
@@ -49,9 +58,33 @@ export class GeFinanceImportService {
     private readonly geFinanceProviderFactory: GeFinanceProviderFactory,
   ) {}
 
+  async backfillDailyHashes(params: {
+    file: string;
+  }): Promise<GeFinanceDailyHashBackfillResult> {
+    const provider = this.geFinanceProviderFactory(
+      params.file,
+    ) as unknown as Pick<GeFinanceReportProvider, 'inspectReport'>;
+    const report = await provider.inspectReport();
+    const accountOrdinal = reportAccountOrdinal(report);
+    const accounts = await this.resolveAccounts(accountOrdinal);
+    const backfill = await this.backfill.backfillGeFinanceDailyHashes({
+      marketplaceAccountId: accounts.marketplaceAccount.id,
+      from: report.from,
+      to: report.to,
+      days: report.days,
+    });
+
+    return {
+      report,
+      ...accounts,
+      backfill,
+    };
+  }
+
   async execute(params: {
     file: string;
     sha256: string;
+    onProgress?: (progress: DailySellerMetricsBackfillProgress) => void;
   }): Promise<GeFinanceImportResult> {
     const provider = this.geFinanceProviderFactory(
       params.file,
@@ -64,9 +97,11 @@ export class GeFinanceImportService {
       olistAccountId: accounts.olistAccount.id,
       geFinanceReportPath: params.file,
       geFinanceReportSha256: params.sha256,
+      geFinanceDays: report.days,
       geFinanceProvider: provider as FinancialEvidenceProvider,
       from: report.from,
       to: report.to,
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
     });
 
     return { report, ...accounts, backfill };

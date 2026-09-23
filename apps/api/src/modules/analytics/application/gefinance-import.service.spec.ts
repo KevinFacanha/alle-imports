@@ -7,10 +7,18 @@ import {
 } from './gefinance-import.service.js';
 
 const SHA256 = 'a'.repeat(64);
+const DAILY_DAYS = [
+  {
+    businessDate: '2026-09-01',
+    recordCount: 123,
+    sha256: '1'.repeat(64),
+  },
+];
 const INSPECTION = {
   from: '2026-09-01',
   to: '2026-09-22',
   recordCount: 123,
+  days: DAILY_DAYS,
   channels: [
     {
       original: 'ML_ALEIMMPORTS 2',
@@ -99,9 +107,42 @@ describe('GeFinanceImportService', () => {
       olistAccountId: 'olist-1',
       geFinanceReportPath: '/reports/gefinance.xlsx',
       geFinanceReportSha256: SHA256,
+      geFinanceDays: DAILY_DAYS,
       geFinanceProvider: provider,
       from: '2026-09-01',
       to: '2026-09-22',
+    });
+  });
+
+  it('backfills daily hashes locally after resolving the isolated C2 account', async () => {
+    let financialEvidenceCalls = 0;
+    const backfill = new BackfillFake();
+    const service = new GeFinanceImportService(
+      database(
+        [{ id: 'ml-2', name: 'ALE_IMPORTS 2' }],
+        [{ id: 'olist-2', name: 'Ale Imports', integrationKey: 'c2' }],
+      ) as never,
+      backfill as never,
+      () => ({
+        inspectReport: async () => INSPECTION,
+        getFinancialEvidence: async () => {
+          financialEvidenceCalls += 1;
+          return { records: [] };
+        },
+      }) as never,
+    );
+
+    const result = await service.backfillDailyHashes({
+      file: '/reports/gefinance.xlsx',
+    });
+
+    assert.equal(financialEvidenceCalls, 0);
+    assert.equal(result.backfill.hashesFilled, 1);
+    assert.deepEqual(backfill.localParams, {
+      marketplaceAccountId: 'ml-2',
+      from: INSPECTION.from,
+      to: INSPECTION.to,
+      days: DAILY_DAYS,
     });
   });
 
@@ -201,12 +242,27 @@ function database(
 
 class BackfillFake {
   params?: unknown;
+  localParams?: unknown;
+
+  async backfillGeFinanceDailyHashes(params: unknown) {
+    this.localParams = params;
+    return {
+      daysFound: 1,
+      snapshotsFound: 1,
+      hashesFilled: 1,
+      alreadyHashed: 0,
+      snapshotsMissing: 0,
+    };
+  }
 
   async execute(params: unknown) {
     this.params = params;
     return {
       from: INSPECTION.from,
       to: INSPECTION.to,
+      daysFound: 1,
+      externalProcessingDays: 1,
+      skipped: 0,
       daysProcessed: 22,
       created: 22,
       updated: 0,

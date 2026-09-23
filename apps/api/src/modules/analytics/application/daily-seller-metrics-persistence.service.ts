@@ -46,6 +46,7 @@ const PERSISTENCE_TRANSACTION_OPTIONS = {
 export interface DailySellerMetricsExecutionMetadata {
   marketplaceAccountId: string;
   geFinanceReportSha256?: string | null;
+  geFinanceDailySha256?: string | null;
   calculatedAt?: Date;
 }
 
@@ -56,6 +57,7 @@ export interface DailySellerMetricsPersistenceSummary {
   action: 'CREATED' | 'UPDATED';
   calculatedAt: string;
   geFinanceReportSha256: string | null;
+  geFinanceDailySha256: string | null;
   metricCount: number;
   unavailableMetrics: PersistedSellerMetricName[];
 }
@@ -67,9 +69,135 @@ export class DailySellerMetricsPersistenceError extends Error {
   }
 }
 
+export interface ExistingDailySellerMetricsSnapshot {
+  geFinanceDailySha256: string | null;
+}
+
+export interface GeFinanceDailyHashInput {
+  businessDate: string;
+  sha256: string;
+}
+
+export interface GeFinanceDailyHashBackfillSummary {
+  daysFound: number;
+  snapshotsFound: number;
+  hashesFilled: number;
+  alreadyHashed: number;
+  snapshotsMissing: number;
+}
+
 @Injectable()
 export class DailySellerMetricsPersistenceService {
   constructor(private readonly database: DatabaseService) {}
+
+  async findExistingSnapshots(params: {
+    marketplaceAccountId: string;
+    from: string;
+    to: string;
+  }): Promise<Map<string, ExistingDailySellerMetricsSnapshot>> {
+    const snapshots = await this.database.dailySellerMetrics.findMany({
+      where: {
+        marketplaceAccountId: params.marketplaceAccountId,
+        businessDate: {
+          gte: parseBusinessDate(params.from),
+          lte: parseBusinessDate(params.to),
+        },
+      },
+      select: {
+        businessDate: true,
+        geFinanceDailySha256: true,
+      },
+    });
+
+    return new Map(
+      snapshots.map(({ businessDate, ...hashes }) => [
+        businessDate.toISOString().slice(0, 10),
+        hashes,
+      ]),
+    );
+  }
+
+  async backfillGeFinanceDailyHashes(params: {
+    marketplaceAccountId: string;
+    from: string;
+    to: string;
+    days: readonly GeFinanceDailyHashInput[];
+  }): Promise<GeFinanceDailyHashBackfillSummary> {
+    if (!params.marketplaceAccountId || params.days.length === 0) {
+      throw new DailySellerMetricsPersistenceError(
+        'Marketplace account id and GeFinance daily hashes are required.',
+      );
+    }
+    const hashesByDate = new Map<string, string>();
+    for (const day of params.days) {
+      parseBusinessDate(day.businessDate);
+      if (!/^[a-f0-9]{64}$/i.test(day.sha256)) {
+        throw new DailySellerMetricsPersistenceError(
+          'GeFinance daily SHA-256 must contain 64 hexadecimal characters.',
+        );
+      }
+      if (hashesByDate.has(day.businessDate)) {
+        throw new DailySellerMetricsPersistenceError(
+          `Duplicate GeFinance business date: ${day.businessDate}.`,
+        );
+      }
+      hashesByDate.set(day.businessDate, day.sha256);
+    }
+
+    const snapshots = await this.database.dailySellerMetrics.findMany({
+      where: {
+        marketplaceAccountId: params.marketplaceAccountId,
+        businessDate: {
+          gte: parseBusinessDate(params.from),
+          lte: parseBusinessDate(params.to),
+        },
+      },
+      select: {
+        id: true,
+        businessDate: true,
+        geFinanceDailySha256: true,
+      },
+    });
+    const matchingSnapshots = snapshots.filter(({ businessDate }) =>
+      hashesByDate.has(businessDate.toISOString().slice(0, 10)),
+    );
+    const legacy = matchingSnapshots.flatMap((snapshot) => {
+      if (snapshot.geFinanceDailySha256 !== null) return [];
+      const businessDate = snapshot.businessDate.toISOString().slice(0, 10);
+      return [{
+        id: snapshot.id,
+        sha256: hashesByDate.get(businessDate)!,
+      }];
+    });
+
+    let hashesFilled = 0;
+    if (legacy.length > 0) {
+      const values = Prisma.join(
+        legacy.map(({ id, sha256 }) =>
+          Prisma.sql`(${id}::uuid, ${sha256}::char(64))`,
+        ),
+      );
+      hashesFilled = await this.database.$executeRaw(
+        Prisma.sql`
+          UPDATE "daily_seller_metrics" AS snapshot
+          SET "gefinance_daily_sha256" = input.sha256
+          FROM (VALUES ${values}) AS input(id, sha256)
+          WHERE snapshot."id" = input.id
+            AND snapshot."marketplace_account_id" =
+              ${params.marketplaceAccountId}::uuid
+            AND snapshot."gefinance_daily_sha256" IS NULL
+        `,
+      );
+    }
+
+    return {
+      daysFound: params.days.length,
+      snapshotsFound: matchingSnapshots.length,
+      hashesFilled,
+      alreadyHashed: matchingSnapshots.length - legacy.length,
+      snapshotsMissing: params.days.length - matchingSnapshots.length,
+    };
+  }
 
   async persist(
     resolved: ResolvedSellerBiMetrics,
@@ -105,11 +233,13 @@ export class DailySellerMetricsPersistenceService {
           businessDate,
           timezone: resolved.timeZone,
           geFinanceReportSha256: metadata.geFinanceReportSha256 ?? null,
+          geFinanceDailySha256: metadata.geFinanceDailySha256 ?? null,
           calculatedAt,
         },
         update: {
           timezone: resolved.timeZone,
           geFinanceReportSha256: metadata.geFinanceReportSha256 ?? null,
+          geFinanceDailySha256: metadata.geFinanceDailySha256 ?? null,
           calculatedAt,
         },
         select: { id: true },
@@ -136,6 +266,7 @@ export class DailySellerMetricsPersistenceService {
       action,
       calculatedAt: calculatedAt.toISOString(),
       geFinanceReportSha256: metadata.geFinanceReportSha256 ?? null,
+      geFinanceDailySha256: metadata.geFinanceDailySha256 ?? null,
       metricCount: metrics.length,
       unavailableMetrics: metrics
         .filter(({ data }) => data.status === 'UNAVAILABLE')
@@ -246,6 +377,15 @@ function validateMetadata(
   ) {
     throw new DailySellerMetricsPersistenceError(
       'GeFinance report SHA-256 must contain 64 hexadecimal characters.',
+    );
+  }
+  if (
+    metadata.geFinanceDailySha256 !== undefined &&
+    metadata.geFinanceDailySha256 !== null &&
+    !/^[a-f0-9]{64}$/i.test(metadata.geFinanceDailySha256)
+  ) {
+    throw new DailySellerMetricsPersistenceError(
+      'GeFinance daily SHA-256 must contain 64 hexadecimal characters.',
     );
   }
 }

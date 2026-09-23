@@ -13,6 +13,7 @@ import { DailySellerMetricsPersistenceService } from './daily-seller-metrics-per
 const ACCOUNT_ID = '00000000-0000-4000-8000-000000000001';
 const SECOND_ACCOUNT_ID = '00000000-0000-4000-8000-000000000002';
 const REPORT_HASH = 'a'.repeat(64);
+const DAILY_HASH = 'd'.repeat(64);
 
 describe('DailySellerMetricsPersistenceService', () => {
   it('creates one daily snapshot with ten Decimal metric values', async () => {
@@ -29,6 +30,7 @@ describe('DailySellerMetricsPersistenceService', () => {
       timeout: 30_000,
     });
     assert.equal(database.snapshot(ACCOUNT_ID).geFinanceReportSha256, REPORT_HASH);
+    assert.equal(database.snapshot(ACCOUNT_ID).geFinanceDailySha256, DAILY_HASH);
     const grossSales = database.metric(ACCOUNT_ID, 'GROSS_SALES');
     assert.ok(grossSales.value instanceof Prisma.Decimal);
     assert.equal(grossSales.value.toString(), '100.25');
@@ -94,6 +96,70 @@ describe('DailySellerMetricsPersistenceService', () => {
     assert.equal(database.metrics.size, 20);
     assert.equal(decimalValue(database.metric(ACCOUNT_ID, 'SALES_COUNT')).toString(), '2');
     assert.equal(decimalValue(database.metric(SECOND_ACCOUNT_ID, 'SALES_COUNT')).toString(), '22');
+    const firstAccountSnapshots = await persistence.findExistingSnapshots({
+      marketplaceAccountId: ACCOUNT_ID,
+      from: '2026-09-16',
+      to: '2026-09-16',
+    });
+    const secondAccountSnapshots = await persistence.findExistingSnapshots({
+      marketplaceAccountId: SECOND_ACCOUNT_ID,
+      from: '2026-09-16',
+      to: '2026-09-16',
+    });
+    assert.equal(firstAccountSnapshots.size, 1);
+    assert.equal(secondAccountSnapshots.size, 1);
+    assert.equal(
+      firstAccountSnapshots.get('2026-09-16')?.geFinanceDailySha256,
+      DAILY_HASH,
+    );
+  });
+
+  it('backfills legacy daily hashes locally without changing metrics, calculatedAt or another account', async () => {
+    const database = new InMemoryDatabase();
+    const persistence = service(database);
+    await persistence.persist(resolved(), metadata());
+    await persistence.persist(resolved(), metadata(SECOND_ACCOUNT_ID));
+    const firstSnapshot = database.snapshot(ACCOUNT_ID);
+    const secondSnapshot = database.snapshot(SECOND_ACCOUNT_ID);
+    firstSnapshot.geFinanceDailySha256 = null;
+    secondSnapshot.geFinanceDailySha256 = null;
+    const calculatedAt = firstSnapshot.calculatedAt.toISOString();
+    const metricsBefore = JSON.stringify([...database.metrics.values()]);
+
+    const result = await persistence.backfillGeFinanceDailyHashes({
+      marketplaceAccountId: ACCOUNT_ID,
+      from: '2026-09-16',
+      to: '2026-09-16',
+      days: [{ businessDate: '2026-09-16', sha256: DAILY_HASH }],
+    });
+
+    assert.deepEqual(result, {
+      daysFound: 1,
+      snapshotsFound: 1,
+      hashesFilled: 1,
+      alreadyHashed: 0,
+      snapshotsMissing: 0,
+    });
+    assert.equal(database.findManyCount, 1);
+    assert.equal(database.executeRawCount, 1);
+    assert.equal(firstSnapshot.geFinanceDailySha256, DAILY_HASH);
+    assert.equal(secondSnapshot.geFinanceDailySha256, null);
+    assert.equal(firstSnapshot.calculatedAt.toISOString(), calculatedAt);
+    assert.equal(JSON.stringify([...database.metrics.values()]), metricsBefore);
+    assert.equal(database.lastRawSql?.includes('calculated_at'), false);
+    assert.equal(database.lastRawSql?.includes('updated_at'), false);
+    assert.equal(database.lastRawSql?.includes('daily_seller_metric_values'), false);
+
+    const repeated = await persistence.backfillGeFinanceDailyHashes({
+      marketplaceAccountId: ACCOUNT_ID,
+      from: '2026-09-16',
+      to: '2026-09-16',
+      days: [{ businessDate: '2026-09-16', sha256: 'e'.repeat(64) }],
+    });
+    assert.equal(repeated.hashesFilled, 0);
+    assert.equal(repeated.alreadyHashed, 1);
+    assert.equal(firstSnapshot.geFinanceDailySha256, DAILY_HASH);
+    assert.equal(database.executeRawCount, 1);
   });
 
   it('persists all Full metrics with their own provenance', async () => {
@@ -181,6 +247,7 @@ function metadata(marketplaceAccountId = ACCOUNT_ID) {
   return {
     marketplaceAccountId,
     geFinanceReportSha256: REPORT_HASH,
+    geFinanceDailySha256: DAILY_HASH,
     calculatedAt: new Date('2026-09-16T20:00:00.000Z'),
   };
 }
@@ -243,6 +310,7 @@ interface StoredSnapshot {
   businessDate: Date;
   timezone: string;
   geFinanceReportSha256: string | null;
+  geFinanceDailySha256: string | null;
   calculatedAt: Date;
 }
 
@@ -262,13 +330,64 @@ interface SnapshotIdentity {
   };
 }
 
+interface SnapshotRangeQuery {
+  where: {
+    marketplaceAccountId: string;
+    businessDate: { gte: Date; lte: Date };
+  };
+}
+
 class InMemoryDatabase {
   snapshots = new Map<string, StoredSnapshot>();
   metrics = new Map<string, StoredMetric>();
   transactionCount = 0;
   transactionOptions: { maxWait?: number; timeout?: number } | undefined;
   failCreateMany = false;
+  findManyCount = 0;
+  executeRawCount = 0;
+  lastRawSql: string | undefined;
   private nextId = 1;
+
+  readonly dailySellerMetrics = {
+    findMany: async (args: SnapshotRangeQuery) => {
+      this.findManyCount += 1;
+      return [...this.snapshots.values()]
+        .filter(
+          (snapshot) =>
+            snapshot.marketplaceAccountId === args.where.marketplaceAccountId &&
+            snapshot.businessDate >= args.where.businessDate.gte &&
+            snapshot.businessDate <= args.where.businessDate.lte,
+        )
+        .map((snapshot) => ({
+          id: snapshot.id,
+          businessDate: snapshot.businessDate,
+          geFinanceReportSha256: snapshot.geFinanceReportSha256,
+          geFinanceDailySha256: snapshot.geFinanceDailySha256,
+        }));
+    },
+  };
+
+  async $executeRaw(query: Prisma.Sql): Promise<number> {
+    this.executeRawCount += 1;
+    this.lastRawSql = query.sql;
+    const values = query.values as unknown[];
+    const marketplaceAccountId = String(values.at(-1));
+    let updated = 0;
+    for (let index = 0; index < values.length - 1; index += 2) {
+      const id = String(values[index]);
+      const sha256 = String(values[index + 1]);
+      const snapshot = [...this.snapshots.values()].find(
+        (candidate) =>
+          candidate.id === id &&
+          candidate.marketplaceAccountId === marketplaceAccountId,
+      );
+      if (snapshot?.geFinanceDailySha256 === null) {
+        snapshot.geFinanceDailySha256 = sha256;
+        updated += 1;
+      }
+    }
+    return updated;
+  }
 
   async $transaction<T>(
     callback: (transaction: object) => Promise<T>,

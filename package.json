@@ -19,6 +19,7 @@
     "reconcile:seller-metrics": "npm run reconcile:seller-metrics --workspace=@ale-intelligence/api --",
     "persist:seller-metrics": "npm run persist:seller-metrics --workspace=@ale-intelligence/api --",
     "backfill:seller-metrics": "npm run backfill:seller-metrics --workspace=@ale-intelligence/api --",
+    "backfill:gefinance:daily-hashes": "npm run backfill:gefinance:daily-hashes --workspace=@ale-intelligence/api --",
     "import:gefinance": "npm run import:gefinance --workspace=@ale-intelligence/api --",
     "inspect:olist:orders": "npm run inspect:olist:orders --workspace=@ale-intelligence/api --",
     "inspect:olist:only": "npm run inspect:olist:only --workspace=@ale-intelligence/api --",

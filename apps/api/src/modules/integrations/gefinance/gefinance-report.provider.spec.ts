@@ -188,7 +188,8 @@ describe('GeFinanceReportProvider', () => {
 
     const inspection = await new GeFinanceReportProvider(file).inspectReport();
 
-    assert.deepEqual(inspection, {
+    const { days, ...summary } = inspection;
+    assert.deepEqual(summary, {
       from: '2026-09-01',
       to: '2026-09-22',
       recordCount: 3,
@@ -205,6 +206,68 @@ describe('GeFinanceReportProvider', () => {
         },
       ],
     });
+    assert.deepEqual(
+      days.map(({ businessDate, recordCount }) => ({
+        businessDate,
+        recordCount,
+      })),
+      [
+        { businessDate: '2026-09-01', recordCount: 2 },
+        { businessDate: '2026-09-22', recordCount: 1 },
+      ],
+    );
+    assert.ok(days.every(({ sha256 }) => /^[a-f0-9]{64}$/.test(sha256)));
+  });
+
+  it('keeps the daily hash stable when XLSX row order changes', async () => {
+    const first = row({ orderReference: 'ORDER-1', totalSaleAmount: '100,00' });
+    const second = row({ orderReference: 'ORDER-2', totalSaleAmount: '250,50' });
+    const original = await reportFile([first, second]);
+    const reordered = await reportFile([second, first]);
+
+    assert.equal(await dailyHash(original), await dailyHash(reordered));
+  });
+
+  it('normalizes equivalent Decimal representations in the daily hash', async () => {
+    const numeric = await reportFile([
+      row({ totalSaleAmount: 100, marginAmount: 10 }),
+    ]);
+    const formatted = await reportFile([
+      row({ totalSaleAmount: '100,0000', marginAmount: '10,000000' }),
+    ]);
+
+    assert.equal(await dailyHash(numeric), await dailyHash(formatted));
+  });
+
+  it('excludes PII columns and values from the daily hash', async () => {
+    const headers = [...requiredHeaders(), ...PII_HEADERS];
+    const first = await reportFile(
+      [row({}, { Cliente: 'Pessoa A', Email: 'a@example.com' })],
+      headers,
+    );
+    const second = await reportFile(
+      [row({}, { Cliente: 'Pessoa B', Email: 'b@example.com' })],
+      headers,
+    );
+
+    assert.equal(await dailyHash(first), await dailyHash(second));
+  });
+
+  it('keeps C1 and C2 daily content isolated', async () => {
+    const c1 = await reportFile([
+      row({
+        channel: 'ML_ALEIMMPORTS 1',
+        orderReference: 'SHARED-ORDER',
+      }),
+    ]);
+    const c2 = await reportFile([
+      row({
+        channel: 'ML_ALEIMMPORTS 2',
+        orderReference: 'SHARED-ORDER',
+      }),
+    ]);
+
+    assert.notEqual(await dailyHash(c1), await dailyHash(c2));
   });
 
   it('preserves original channels and normalizes multiple known channels', async () => {
@@ -474,6 +537,12 @@ async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'gefinance-report-'));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+async function dailyHash(file: string): Promise<string> {
+  const inspection = await new GeFinanceReportProvider(file).inspectReport();
+  assert.equal(inspection.days.length, 1);
+  return inspection.days[0]!.sha256;
 }
 
 function read(file: string) {
