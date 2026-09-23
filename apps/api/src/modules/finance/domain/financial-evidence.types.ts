@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 export type FinancialChannelCode =
   | 'MERCADO_LIVRE_ACCOUNT_1'
   | 'MERCADO_LIVRE_ACCOUNT_2'
+  | 'MERCADO_LIVRE_FULFILLMENT_C1'
   | 'MERCADO_LIVRE_FULFILLMENT_C2'
   | 'OTHER';
 

@@ -26,6 +26,51 @@ const INSPECTION = {
 };
 
 describe('GeFinanceImportService', () => {
+  it('resolves Conta 1 by C1 channels and integrationKey even without a space before the account ordinal', async () => {
+    const c1Inspection = {
+      ...INSPECTION,
+      channels: [
+        {
+          original: 'ML_ALEIMMPORTS 1',
+          normalized: 'MERCADO_LIVRE_ACCOUNT_1' as const,
+          recordCount: 100,
+        },
+        {
+          original: 'Mercado Livre Fulfillment C1',
+          normalized: 'MERCADO_LIVRE_FULFILLMENT_C1' as const,
+          recordCount: 23,
+        },
+      ],
+    };
+    const backfill = new BackfillFake();
+    const service = new GeFinanceImportService(
+      database(
+        [
+          { id: 'ml-1', name: 'ALE_IMPORTS1' },
+          { id: 'ml-2', name: 'ALE_IMPORTS 2' },
+        ],
+        [
+          { id: 'olist-1', name: 'Ale Imports', integrationKey: 'c1' },
+          { id: 'olist-2', name: 'Ale Imports', integrationKey: 'c2' },
+        ],
+      ) as never,
+      backfill as never,
+      () => ({
+        inspectReport: async () => c1Inspection,
+        getFinancialEvidence: async () => ({ records: [] }),
+      }) as never,
+    );
+
+    const result = await service.execute({
+      file: '/reports/gefinance-c1.xlsx',
+      sha256: SHA256,
+    });
+
+    assert.equal(result.marketplaceAccount.id, 'ml-1');
+    assert.equal(result.olistAccount.id, 'olist-1');
+    assert.equal(result.olistAccount.integrationKey, 'c1');
+  });
+
   it('detects the report scope, resolves exact related accounts and reuses the backfill service', async () => {
     const provider = {
       inspectReport: async () => INSPECTION,
@@ -36,7 +81,7 @@ describe('GeFinanceImportService', () => {
       database([
         { id: 'ml-1', name: 'ALE_IMPORTS1' },
         { id: 'ml-2', name: 'ALE_IMPORTS 2' },
-      ], [{ id: 'olist-1', name: 'Ale Imports ' }]) as never,
+      ], [{ id: 'olist-1', name: 'Ale Imports ', integrationKey: 'c2' }]) as never,
       backfill as never,
       () => provider as never,
     );
@@ -66,7 +111,7 @@ describe('GeFinanceImportService', () => {
         { id: 'ml-2a', name: 'ALE_IMPORTS 2' },
         { id: 'ml-2b', name: 'OUTRA LOJA 2' },
       ],
-      [{ id: 'olist-1', name: 'Ale Imports' }],
+      [{ id: 'olist-1', name: 'Ale Imports', integrationKey: 'c2' }],
     );
 
     await assert.rejects(
@@ -81,8 +126,8 @@ describe('GeFinanceImportService', () => {
     const service = createService(
       [{ id: 'ml-2', name: 'ALE_IMPORTS 2' }],
       [
-        { id: 'olist-1', name: 'Ale Imports' },
-        { id: 'olist-2', name: 'ALE_IMPORTS' },
+        { id: 'olist-1', name: 'Ale Imports', integrationKey: 'c2' },
+        { id: 'olist-2', name: 'ALE_IMPORTS', integrationKey: 'c2' },
       ],
     );
 
@@ -127,7 +172,7 @@ describe('GeFinanceImportService', () => {
 
 function createService(
   marketplaceAccounts: Array<{ id: string; name: string }>,
-  olistAccounts: Array<{ id: string; name: string }>,
+  olistAccounts: Array<{ id: string; name: string; integrationKey: string }>,
 ): GeFinanceImportService {
   return new GeFinanceImportService(
     database(marketplaceAccounts, olistAccounts) as never,
@@ -141,11 +186,16 @@ function createService(
 
 function database(
   marketplaceAccounts: Array<{ id: string; name: string }>,
-  olistAccounts: Array<{ id: string; name: string }>,
+  olistAccounts: Array<{ id: string; name: string; integrationKey: string }>,
 ) {
   return {
     marketplaceAccount: { findMany: async () => marketplaceAccounts },
-    olistAccount: { findMany: async () => olistAccounts },
+    olistAccount: {
+      findMany: async () => olistAccounts.map(({ integrationKey, ...account }) => ({
+        ...account,
+        authorization: { integrationKey },
+      })),
+    },
   };
 }
 

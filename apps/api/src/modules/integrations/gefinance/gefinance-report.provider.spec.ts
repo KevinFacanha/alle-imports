@@ -209,6 +209,11 @@ describe('GeFinanceReportProvider', () => {
 
   it('preserves original channels and normalizes multiple known channels', async () => {
     const file = await reportFile([
+      row({ channel: 'ML_ALEIMMPORTS 1', orderReference: 'ORDER-C1' }),
+      row({
+        channel: 'Mercado Livre Fulfillment C1',
+        orderReference: 'ORDER-FULL-C1',
+      }),
       row({ channel: 'ML_ALEIMMPORTS 2', orderReference: 'ORDER-1' }),
       row({
         channel: 'Mercado Livre Fulfillment C2',
@@ -222,6 +227,11 @@ describe('GeFinanceReportProvider', () => {
     assert.deepEqual(
       records.map((record) => [record.channel.original, record.channel.normalized]),
       [
+        ['ML_ALEIMMPORTS 1', 'MERCADO_LIVRE_ACCOUNT_1'],
+        [
+          'Mercado Livre Fulfillment C1',
+          'MERCADO_LIVRE_FULFILLMENT_C1',
+        ],
         ['ML_ALEIMMPORTS 2', 'MERCADO_LIVRE_ACCOUNT_2'],
         [
           'Mercado Livre Fulfillment C2',

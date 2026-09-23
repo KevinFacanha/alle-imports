@@ -11,6 +11,7 @@ import {
 const ORDERS_URL = 'https://api.tiny.com.br/public-api/v3/pedidos';
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
+const MAX_TIMEOUT_ATTEMPTS = 3;
 
 export const OLIST_ORDERS_FETCH = Symbol('OLIST_ORDERS_FETCH');
 export const OLIST_ORDERS_TIMEOUT_MS = Symbol('OLIST_ORDERS_TIMEOUT_MS');
@@ -186,6 +187,28 @@ export class OlistOrdersClient {
   }
 
   private async getJson(url: URL, account: { id: string }): Promise<unknown> {
+    for (let attempt = 1; attempt <= MAX_TIMEOUT_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.getJsonOnce(url, account);
+      } catch (error: unknown) {
+        const shouldRetry =
+          error instanceof OlistOrdersClientError &&
+          error.code === 'TIMEOUT' &&
+          attempt < MAX_TIMEOUT_ATTEMPTS;
+        if (!shouldRetry) throw error;
+        await this.waitForTimeoutRetry(attempt);
+      }
+    }
+    throw new OlistOrdersClientError(
+      'Olist orders request timed out.',
+      'TIMEOUT',
+    );
+  }
+
+  private async getJsonOnce(
+    url: URL,
+    account: { id: string },
+  ): Promise<unknown> {
     await this.waitForRequestSlot();
     const accessToken = await (
       this.authorization as unknown as OlistAccessTokenProvider
@@ -223,6 +246,13 @@ export class OlistOrdersClient {
       );
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private async waitForTimeoutRetry(failedAttempt: number): Promise<void> {
+    const backoffMs = this.requestIntervalMs * 2 ** (failedAttempt - 1);
+    if (backoffMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
     }
   }
 

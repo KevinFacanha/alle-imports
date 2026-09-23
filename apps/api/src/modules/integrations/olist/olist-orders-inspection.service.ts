@@ -20,11 +20,7 @@ import { OlistOrder } from './olist-orders.types.js';
 
 const FULFILLMENT_LOGISTIC_TYPE = 'fulfillment';
 const OLIST_FULFILLMENT_CHANNEL = 'Mercado Livre Fulfillment';
-const OLIST_STANDARD_CHANNEL = 'ML_ALEIMMPORTS 2';
-const INCLUDED_OLIST_CHANNELS = new Set([
-  OLIST_STANDARD_CHANNEL,
-  OLIST_FULFILLMENT_CHANNEL,
-]);
+const OLIST_STANDARD_CHANNEL_PREFIX = 'ML_ALEIMMPORTS';
 const ML_PAGE_SIZE = 50;
 const SHIPMENT_CONCURRENCY = 5;
 
@@ -34,6 +30,7 @@ export type OlistOrdersInspectionErrorCode =
   | 'OLIST_ACCOUNT_INACTIVE'
   | 'MARKETPLACE_ACCOUNT_NOT_FOUND'
   | 'MARKETPLACE_ACCOUNT_INACTIVE'
+  | 'MARKETPLACE_ACCOUNT_UNIDENTIFIED'
   | 'UNSUPPORTED_MARKETPLACE'
   | 'ML_PARTIAL_RESPONSE';
 
@@ -45,6 +42,17 @@ export class OlistOrdersInspectionError extends Error {
     super(message);
     this.name = 'OlistOrdersInspectionError';
   }
+}
+
+function standardOlistChannel(marketplaceAccountName: string): string {
+  const ordinal = /(\d+)\s*$/.exec(marketplaceAccountName.trim())?.[1];
+  if (!ordinal) {
+    throw new OlistOrdersInspectionError(
+      'MARKETPLACE_ACCOUNT_UNIDENTIFIED',
+      'Marketplace account name does not identify its account ordinal.',
+    );
+  }
+  return `${OLIST_STANDARD_CHANNEL_PREFIX} ${ordinal}`;
 }
 
 type MatchingKind = 'MATCHED_EXACT' | 'UNMATCHED' | 'AMBIGUOUS' | 'CONFLICT';
@@ -141,7 +149,7 @@ export interface OlistOrdersInspectionReport {
   endpoints: string[];
   olist: OlistAggregate & {
     channelFilter: {
-      included: [typeof OLIST_STANDARD_CHANNEL, typeof OLIST_FULFILLMENT_CHANNEL];
+      included: [string, typeof OLIST_FULFILLMENT_CHANNEL];
       excludedOrders: number;
     };
     byStatus: Array<{ statusCode: number | null; status: string } & OlistAggregate>;
@@ -434,6 +442,11 @@ export class OlistOrdersInspectionService {
       );
     }
 
+    const olistStandardChannel = standardOlistChannel(marketplaceAccount.name);
+    const includedOlistChannels = new Set([
+      olistStandardChannel,
+      OLIST_FULFILLMENT_CHANNEL,
+    ]);
     const [loadedOlistOrders, mlOrders] = await Promise.all([
       this.olistOrders.listOrders({
         account: olistAccount,
@@ -443,7 +456,7 @@ export class OlistOrdersInspectionService {
       this.loadLiveMercadoLivreOrders(marketplaceAccount, interval),
     ]);
     const olistOrders = loadedOlistOrders.filter((order) =>
-      INCLUDED_OLIST_CHANNELS.has(effectiveOlistChannel(order)),
+      includedOlistChannels.has(effectiveOlistChannel(order)),
     );
     const matches = matchOrders(olistOrders, mlOrders);
     const shipmentClassifications = await classifyShipments(
@@ -517,7 +530,7 @@ export class OlistOrdersInspectionService {
       olist: {
         ...allOlist,
         channelFilter: {
-          included: [OLIST_STANDARD_CHANNEL, OLIST_FULFILLMENT_CHANNEL],
+          included: [olistStandardChannel, OLIST_FULFILLMENT_CHANNEL],
           excludedOrders: loadedOlistOrders.length - olistOrders.length,
         },
         byStatus: buildStatusBreakdown(olistOrders),

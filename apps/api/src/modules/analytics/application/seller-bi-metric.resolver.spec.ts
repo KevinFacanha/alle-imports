@@ -226,7 +226,7 @@ function reconciliation(): SellerMetricsReconciliationResult {
     accountIsolation: {
       marketplace: 'EXACT_ID',
       olist: 'EXACT_ID',
-      geFinance: 'ACCOUNT_2_CHANNEL_ALLOWLIST',
+      geFinance: 'ACCOUNT_CHANNEL_ALLOWLIST',
       excludedGeFinanceRecords: 1,
     },
     general: [

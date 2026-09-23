@@ -52,11 +52,16 @@ type ReportCellValue = CellObject['v'] | null;
 const REQUIRED_HEADERS: readonly string[] = Object.values(
   GEFINANCE_REPORT_COLUMN_NAMES,
 );
-const FINANCIAL_FULL_CHANNEL = 'Mercado Livre Fulfillment C2';
+const FINANCIAL_FULL_CHANNELS = new Set([
+  'Mercado Livre Fulfillment C1',
+  'Mercado Livre Fulfillment C2',
+]);
 
 const CHANNEL_CODES: Readonly<Record<string, FinancialChannelCode>> = {
+  'ML_ALEIMMPORTS 1': 'MERCADO_LIVRE_ACCOUNT_1',
   'ML_ALEIMMPORTS 2': 'MERCADO_LIVRE_ACCOUNT_2',
-  [FINANCIAL_FULL_CHANNEL]: 'MERCADO_LIVRE_FULFILLMENT_C2',
+  'Mercado Livre Fulfillment C1': 'MERCADO_LIVRE_FULFILLMENT_C1',
+  'Mercado Livre Fulfillment C2': 'MERCADO_LIVRE_FULFILLMENT_C2',
 };
 
 export interface GeFinanceReportInspection {
@@ -506,7 +511,7 @@ function mapRow(
       rowNumber,
     ),
     isFinancialFulfillmentEvidence:
-      channelOriginal === FINANCIAL_FULL_CHANNEL,
+      FINANCIAL_FULL_CHANNELS.has(channelOriginal),
   };
 }
 

@@ -20,14 +20,16 @@ import {
 const CHANNEL_ACCOUNT_ORDINALS: Partial<
   Record<FinancialChannelCode, number>
 > = {
+  MERCADO_LIVRE_ACCOUNT_1: 1,
   MERCADO_LIVRE_ACCOUNT_2: 2,
+  MERCADO_LIVRE_FULFILLMENT_C1: 1,
   MERCADO_LIVRE_FULFILLMENT_C2: 2,
 };
 
 export interface GeFinanceImportResult {
   report: GeFinanceReportInspection;
   marketplaceAccount: { id: string; name: string };
-  olistAccount: { id: string; name: string };
+  olistAccount: { id: string; name: string; integrationKey: string };
   backfill: DailySellerMetricsBackfillSummary;
 }
 
@@ -72,7 +74,7 @@ export class GeFinanceImportService {
 
   private async resolveAccounts(accountOrdinal: number): Promise<{
     marketplaceAccount: { id: string; name: string };
-    olistAccount: { id: string; name: string };
+    olistAccount: { id: string; name: string; integrationKey: string };
   }> {
     const [marketplaceAccounts, olistAccounts] = await Promise.all([
       this.database.marketplaceAccount.findMany({
@@ -81,7 +83,11 @@ export class GeFinanceImportService {
       }),
       this.database.olistAccount.findMany({
         where: { active: true },
-        select: { id: true, name: true },
+        select: {
+          id: true,
+          name: true,
+          authorization: { select: { integrationKey: true } },
+        },
       }),
     ]);
     const marketplaceMatches = marketplaceAccounts.filter(
@@ -94,17 +100,26 @@ export class GeFinanceImportService {
     }
 
     const marketplaceAccount = marketplaceMatches[0]!;
-    const marketplaceBaseName = accountNameParts(marketplaceAccount.name).base;
+    const expectedIntegrationKey = `c${accountOrdinal}`;
     const olistMatches = olistAccounts.filter(
-      ({ name }) => accountNameParts(name).base === marketplaceBaseName,
+      ({ authorization }) =>
+        authorization?.integrationKey === expectedIntegrationKey,
     );
     if (olistMatches.length !== 1) {
       throw new GeFinanceImportError(
-        `Não foi possível identificar de forma inequívoca a OlistAccount relacionada a "${marketplaceAccount.name}": esperada 1 conta Olist ativa com o mesmo nome-base, encontradas ${olistMatches.length}.`,
+        `Não foi possível identificar de forma inequívoca a OlistAccount relacionada a "${marketplaceAccount.name}": esperada 1 conta Olist ativa com integrationKey=${expectedIntegrationKey}, encontradas ${olistMatches.length}.`,
       );
     }
 
-    return { marketplaceAccount, olistAccount: olistMatches[0]! };
+    const olistAccount = olistMatches[0]!;
+    return {
+      marketplaceAccount,
+      olistAccount: {
+        id: olistAccount.id,
+        name: olistAccount.name,
+        integrationKey: olistAccount.authorization!.integrationKey,
+      },
+    };
   }
 }
 
@@ -137,7 +152,7 @@ function accountNameParts(value: string): { base: string; ordinal: number | null
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
     .trim();
-  const ordinalMatch = /(?:^|\s)(\d+)\s*$/.exec(normalized);
+  const ordinalMatch = /(\d+)\s*$/.exec(normalized);
   const withoutOrdinal = ordinalMatch
     ? normalized.slice(0, ordinalMatch.index)
     : normalized;

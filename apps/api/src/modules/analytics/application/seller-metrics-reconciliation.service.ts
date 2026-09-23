@@ -14,11 +14,16 @@ import {
   MercadoLivreClientError,
 } from '../../marketplaces/mercado-livre/mercado-livre.client.js';
 
-const ACCOUNT_2_CHANNELS = new Set([
+const SUPPORTED_ACCOUNT_CHANNELS = new Set([
+  'MERCADO_LIVRE_ACCOUNT_1',
   'MERCADO_LIVRE_ACCOUNT_2',
+  'MERCADO_LIVRE_FULFILLMENT_C1',
   'MERCADO_LIVRE_FULFILLMENT_C2',
 ]);
-const FULL_CHANNEL = 'MERCADO_LIVRE_FULFILLMENT_C2';
+const FULL_CHANNELS = new Set([
+  'MERCADO_LIVRE_FULFILLMENT_C1',
+  'MERCADO_LIVRE_FULFILLMENT_C2',
+]);
 
 export const GEFINANCE_PROVIDER_FACTORY = Symbol(
   'GEFINANCE_PROVIDER_FACTORY',
@@ -87,7 +92,7 @@ export interface SellerMetricsReconciliationReport {
   accountIsolation: {
     marketplace: 'EXACT_ID';
     olist: 'EXACT_ID';
-    geFinance: 'ACCOUNT_2_CHANNEL_ALLOWLIST';
+    geFinance: 'ACCOUNT_CHANNEL_ALLOWLIST';
     excludedGeFinanceRecords: number;
   };
   general: SellerMetricEvidence[];
@@ -151,7 +156,7 @@ export class SellerMetricsReconciliationService {
     const unfilteredFinancial = await geFinanceProvider.getFinancialEvidence({
       date: params.date,
     });
-    const financial = filterAccount2FinancialEvidence(unfilteredFinancial);
+    const financial = filterAccountFinancialEvidence(unfilteredFinancial);
     const fullFinancial = filterFullFinancialEvidence(financial);
     const financialSummary = summarizeFinancialEvidence(financial);
     const fullFinancialSummary = summarizeFinancialEvidence(fullFinancial);
@@ -434,7 +439,7 @@ export class SellerMetricsReconciliationService {
       accountIsolation: {
         marketplace: 'EXACT_ID',
         olist: 'EXACT_ID',
-        geFinance: 'ACCOUNT_2_CHANNEL_ALLOWLIST',
+        geFinance: 'ACCOUNT_CHANNEL_ALLOWLIST',
         excludedGeFinanceRecords:
           unfilteredFinancial.records.length - financial.records.length,
       },
@@ -465,13 +470,13 @@ export class SellerMetricsReconciliationService {
   }
 }
 
-function filterAccount2FinancialEvidence(
+function filterAccountFinancialEvidence(
   report: FinancialEvidenceReport,
 ): FinancialEvidenceReport {
   return {
     ...report,
     records: report.records.filter((record) =>
-      ACCOUNT_2_CHANNELS.has(record.channel.normalized),
+      SUPPORTED_ACCOUNT_CHANNELS.has(record.channel.normalized),
     ),
   };
 }
@@ -482,7 +487,7 @@ function filterFullFinancialEvidence(
   return {
     ...report,
     records: report.records.filter(
-      (record) => record.channel.normalized === FULL_CHANNEL,
+      (record) => FULL_CHANNELS.has(record.channel.normalized),
     ),
   };
 }

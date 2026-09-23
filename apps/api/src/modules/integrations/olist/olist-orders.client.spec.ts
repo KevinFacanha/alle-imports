@@ -153,9 +153,43 @@ describe('OlistOrdersClient', () => {
       },
     );
   });
+
+  it('retries timed out GET requests twice and succeeds without duplicating orders', async () => {
+    const responses: Array<Response | Error> = [
+      new DOMException('aborted', 'AbortError'),
+      jsonResponse(listResponse([summary(10)], 0, 100, 1)),
+      jsonResponse(detail(10)),
+    ];
+    const { client, calls } = makeClient(responses);
+
+    const orders = await client.listOrders({
+      account: ACCOUNT,
+      date: '2026-09-16',
+      timeZone: 'America/Sao_Paulo',
+    });
+
+    assert.deepEqual(orders.map(({ olistOrderId }) => olistOrderId), ['10']);
+    assert.equal(calls.length, 3);
+  });
+
+  it('stops after three timeout attempts', async () => {
+    const timeout = () => new DOMException('aborted', 'AbortError');
+    const { client, calls } = makeClient([timeout(), timeout(), timeout()]);
+
+    await assert.rejects(
+      client.listOrders({
+        account: ACCOUNT,
+        date: '2026-09-16',
+        timeZone: 'America/Sao_Paulo',
+      }),
+      (error: unknown) =>
+        error instanceof OlistOrdersClientError && error.code === 'TIMEOUT',
+    );
+    assert.equal(calls.length, 3);
+  });
 });
 
-function makeClient(responses: Response[]) {
+function makeClient(responses: Array<Response | Error>) {
   const calls: Array<{ url: URL; init: RequestInit }> = [];
   let index = 0;
   const fetchMock = (async (
@@ -168,6 +202,7 @@ function makeClient(responses: Response[]) {
     if (!response) {
       throw new Error('Unexpected fetch request.');
     }
+    if (response instanceof Error) throw response;
     return response;
   }) as typeof fetch;
   const authorization = {

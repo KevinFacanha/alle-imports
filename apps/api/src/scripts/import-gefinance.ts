@@ -97,6 +97,7 @@ function printResult(file: string, result: GeFinanceImportResult): void {
       '',
       `Arquivo: ${file}`,
       `Conta: ${marketplaceAccount.name} (Marketplace) / ${olistAccount.name.trim()} (Olist)`,
+      `integrationKey: ${olistAccount.integrationKey}`,
       `Período detectado: ${report.from} a ${report.to}`,
       `Registros GeFinance: ${report.recordCount}`,
       `Dias processados: ${backfill.daysProcessed}`,

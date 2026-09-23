@@ -24,6 +24,10 @@ describe('DailySellerMetricsPersistenceService', () => {
     assert.equal(database.snapshots.size, 1);
     assert.equal(database.metrics.size, 10);
     assert.equal(database.transactionCount, 1);
+    assert.deepEqual(database.transactionOptions, {
+      maxWait: 10_000,
+      timeout: 30_000,
+    });
     assert.equal(database.snapshot(ACCOUNT_ID).geFinanceReportSha256, REPORT_HASH);
     const grossSales = database.metric(ACCOUNT_ID, 'GROSS_SALES');
     assert.ok(grossSales.value instanceof Prisma.Decimal);
@@ -188,7 +192,7 @@ function resolved(): ResolvedSellerBiMetrics {
     accountIsolation: {
       marketplace: 'EXACT_ID',
       olist: 'EXACT_ID',
-      geFinance: 'ACCOUNT_2_CHANNEL_ALLOWLIST',
+      geFinance: 'ACCOUNT_CHANNEL_ALLOWLIST',
       excludedGeFinanceRecords: 1,
     },
     metrics: {
@@ -262,11 +266,16 @@ class InMemoryDatabase {
   snapshots = new Map<string, StoredSnapshot>();
   metrics = new Map<string, StoredMetric>();
   transactionCount = 0;
+  transactionOptions: { maxWait?: number; timeout?: number } | undefined;
   failCreateMany = false;
   private nextId = 1;
 
-  async $transaction<T>(callback: (transaction: object) => Promise<T>): Promise<T> {
+  async $transaction<T>(
+    callback: (transaction: object) => Promise<T>,
+    options?: { maxWait?: number; timeout?: number },
+  ): Promise<T> {
     this.transactionCount += 1;
+    this.transactionOptions = options;
     const snapshots = new Map(this.snapshots);
     const metrics = new Map(this.metrics);
     const transaction = this.transaction(snapshots, metrics);

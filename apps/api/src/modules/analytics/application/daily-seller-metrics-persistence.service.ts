@@ -38,6 +38,11 @@ const DATABASE_METRIC_NAMES: Record<PersistedSellerMetricName, string> = {
   conversionRate: 'CONVERSION_RATE',
 };
 
+const PERSISTENCE_TRANSACTION_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 30_000,
+} as const;
+
 export interface DailySellerMetricsExecutionMetadata {
   marketplaceAccountId: string;
   geFinanceReportSha256?: string | null;
@@ -85,6 +90,9 @@ export class DailySellerMetricsPersistenceService {
       },
     };
 
+    // External reconciliation is complete before this short transaction.
+    // Explicit limits tolerate remote pooler latency while keeping the atomic
+    // snapshot replacement bounded.
     const action = await this.database.$transaction(async (transaction) => {
       const existing = await transaction.dailySellerMetrics.findUnique({
         where: identity,
@@ -119,7 +127,7 @@ export class DailySellerMetricsPersistenceService {
       });
 
       return existing ? 'UPDATED' : 'CREATED';
-    });
+    }, PERSISTENCE_TRANSACTION_OPTIONS);
 
     return {
       marketplaceAccountId: metadata.marketplaceAccountId,
