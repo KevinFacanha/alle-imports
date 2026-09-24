@@ -14,6 +14,7 @@ import type { ComparisonMetricName } from "@/types/seller-metrics"
 
 import { CommercialHeader, type CommercialView } from "./commercial-header"
 import { ComparisonChart } from "./comparison-chart"
+import { ComparisonPerformance } from "./comparison-performance"
 import { ComparisonPeriodFilter } from "./comparison-period-filter"
 import { ComparisonSummary } from "./comparison-summary"
 
@@ -88,6 +89,7 @@ export function AccountComparison({
               partial={comparison.state === "partial"}
             />
             <ComparisonSummary accounts={comparison.comparison.accounts} />
+            <ComparisonPerformance accounts={comparison.comparison.accounts} />
 
             <section aria-labelledby="comparison-charts-title">
               <div className="mb-4">

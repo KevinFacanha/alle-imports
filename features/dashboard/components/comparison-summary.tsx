@@ -8,17 +8,20 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import {
+  formatComparisonMetric,
+  formatDifference,
+  type ComparisonMetricFormat,
+} from "@/features/dashboard/lib/comparison-metrics"
 import type {
   ComparisonMetricName,
   SellerMetricsComparisonAccount,
 } from "@/types/seller-metrics"
 
-type MetricFormat = "currency" | "percentage" | "integer"
-
 const metrics: {
   name: ComparisonMetricName
   label: string
-  format: MetricFormat
+  format: ComparisonMetricFormat
   icon: LucideIcon
 }[] = [
   { name: "grossSales", label: "Faturamento", format: "currency", icon: BadgeDollarSign },
@@ -33,16 +36,6 @@ const metrics: {
   { name: "salesCount", label: "Vendas", format: "integer", icon: ShoppingBag },
   { name: "fullSalesCount", label: "Vendas Full", format: "integer", icon: PackageCheck },
 ]
-
-const currency = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-})
-const integer = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 })
-const percentage = new Intl.NumberFormat("pt-BR", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
 
 export function ComparisonSummary({
   accounts,
@@ -104,19 +97,24 @@ function SummaryCard({
         <AccountValue
           shortName="Conta 1"
           name={accountA.name}
-          value={formatMetric(valueA, metric.format)}
+          value={formatComparisonMetric(valueA, metric.format)}
           color="bg-[#6254d9]"
         />
         <AccountValue
           shortName="Conta 2"
           name={accountB.name}
-          value={formatMetric(valueB, metric.format)}
+          value={formatComparisonMetric(valueB, metric.format)}
           color="bg-[#0f766e]"
         />
       </div>
-      <p className="mt-4 border-t border-slate-100 pt-3 text-[10px] font-medium text-slate-400">
-        {formatDifference(valueA, valueB, metric.format)}
-      </p>
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <p className="text-[9px] font-bold uppercase tracking-[.1em] text-slate-400">
+          Diferença
+        </p>
+        <p className="mt-1 text-xs font-semibold tabular-nums text-slate-600">
+          {formatDifference(valueA, valueB, metric.format)}
+        </p>
+      </div>
     </article>
   )
 }
@@ -146,30 +144,4 @@ function AccountValue({
       </p>
     </div>
   )
-}
-
-function formatMetric(value: string | null, format: MetricFormat): string {
-  const numeric = value === null ? Number.NaN : Number(value)
-  if (!Number.isFinite(numeric)) return "Indisponível"
-  if (format === "currency") return currency.format(numeric)
-  if (format === "percentage") return `${percentage.format(numeric)}%`
-  return integer.format(numeric)
-}
-
-function formatDifference(
-  valueA: string | null,
-  valueB: string | null,
-  format: MetricFormat,
-): string {
-  const accountA = valueA === null ? Number.NaN : Number(valueA)
-  const accountB = valueB === null ? Number.NaN : Number(valueB)
-  if (!Number.isFinite(accountA) || !Number.isFinite(accountB)) {
-    return "Diferença indisponível"
-  }
-  const difference = accountA - accountB
-  const sign = difference > 0 ? "+" : ""
-  if (format === "percentage") {
-    return `Diferença C1 − C2: ${sign}${percentage.format(difference)} p.p.`
-  }
-  return `Diferença C1 − C2: ${sign}${formatMetric(String(difference), format)}`
 }

@@ -1,0 +1,2 @@
+{"id":1,"result":{"result":{"type":"object","subtype":"error","className":"SyntaxError","description":"SyntaxError: Unexpected token ')'","objectId":"4711887163985275510.1.1"},"exceptionDetails":{"exceptionId":2,"text":"Uncaught","lineNumber":0,"columnNumber":2,"scriptId":"56","exception":{"type":"object","subtype":"error","className":"SyntaxError","description":"SyntaxError: Unexpected token ')'","objectId":"4711887163985275510.1.2"}}}}
+{"id":2,"result":{"result":{"type":"string","value":"{\"performance\":false,\"difference\":false,\"margin\":false,\"error\":false}"}}}
