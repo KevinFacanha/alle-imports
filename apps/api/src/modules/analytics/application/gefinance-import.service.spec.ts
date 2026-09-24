@@ -14,6 +14,20 @@ const DAILY_DAYS = [
     sha256: '1'.repeat(64),
   },
 ];
+const PLAN = {
+  daysFound: 1,
+  skipped: 0,
+  localRefreshDays: 0,
+  externalProcessingDays: 1,
+  currentDayIgnored: 0,
+  days: [
+    {
+      date: DAILY_DAYS[0]!.businessDate,
+      sha256: DAILY_DAYS[0]!.sha256,
+      action: 'FULL_EXTERNAL_PROCESS' as const,
+    },
+  ],
+};
 const INSPECTION = {
   from: '2026-09-01',
   to: '2026-09-22',
@@ -111,6 +125,7 @@ describe('GeFinanceImportService', () => {
       geFinanceProvider: provider,
       from: '2026-09-01',
       to: '2026-09-22',
+      plan: PLAN,
     });
   });
 
@@ -274,6 +289,12 @@ function database(
 class BackfillFake {
   params?: unknown;
   localParams?: unknown;
+  preflightParams?: unknown;
+
+  async preflight(params: unknown) {
+    this.preflightParams = params;
+    return PLAN;
+  }
 
   async backfillGeFinanceDailyHashes(params: unknown) {
     this.localParams = params;
@@ -292,7 +313,9 @@ class BackfillFake {
       from: INSPECTION.from,
       to: INSPECTION.to,
       daysFound: 1,
+      localRefreshDays: 0,
       externalProcessingDays: 1,
+      currentDayIgnored: 0,
       skipped: 0,
       daysProcessed: 22,
       created: 22,

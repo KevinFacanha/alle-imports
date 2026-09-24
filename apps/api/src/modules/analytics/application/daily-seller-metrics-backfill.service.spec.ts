@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { Prisma } from '@prisma/client';
+
 import { GeFinanceReportError } from '../../integrations/gefinance/gefinance-report.provider.js';
 import {
   calendarDateRange,
@@ -98,9 +100,9 @@ describe('DailySellerMetricsBackfillService', () => {
     assert.deepEqual(reconciliation.completedDates, ['2026-09-02', '2026-09-03']);
     assert.deepEqual(progress, [
       { index: 1, total: 3, date: '2026-09-01', state: 'COMPLETED', action: 'SKIPPED' },
-      { index: 2, total: 3, date: '2026-09-02', state: 'PROCESSING' },
+      { index: 2, total: 3, date: '2026-09-02', state: 'PROCESSING', processing: 'EXTERNAL' },
       { index: 2, total: 3, date: '2026-09-02', state: 'COMPLETED', action: 'UPDATED' },
-      { index: 3, total: 3, date: '2026-09-03', state: 'PROCESSING' },
+      { index: 3, total: 3, date: '2026-09-03', state: 'PROCESSING', processing: 'EXTERNAL' },
       { index: 3, total: 3, date: '2026-09-03', state: 'COMPLETED', action: 'UPDATED' },
     ]);
   });
@@ -206,19 +208,84 @@ describe('DailySellerMetricsBackfillService', () => {
       new Map([['2026-09-02', 'UPDATED']]),
       existing,
     );
+    let geFinanceCalls = 0;
     const service = new DailySellerMetricsBackfillService(
       reconciliation as never,
       new ResolverFake() as never,
       persistence as never,
-      () => ({ getFinancialEvidence: async () => ({}) }) as never,
+      () => ({
+        getFinancialEvidence: async ({ date }: { date: string }) => {
+          geFinanceCalls += 1;
+          return financialReport(date, '20', '100');
+        },
+      }) as never,
     );
 
     const result = await service.execute(params());
 
     assert.equal(result.skipped, 2);
     assert.equal(result.updated, 1);
-    assert.equal(result.externalProcessingDays, 1);
-    assert.deepEqual(reconciliation.completedDates, ['2026-09-02']);
+    assert.equal(result.localRefreshDays, 1);
+    assert.equal(result.externalProcessingDays, 0);
+    assert.equal(geFinanceCalls, 1);
+    assert.equal(persistence.localRefreshes.length, 1);
+    assert.equal(
+      persistence.localRefreshes[0]?.marginRate.toString(),
+      '0.2',
+    );
+    assert.deepEqual(reconciliation.completedDates, []);
+  });
+
+  it('ignores the current Sao Paulo day by default and --include-today makes a new day external', async () => {
+    const persistence = new PersistenceFake(new Map(), new Map());
+    const reconciliation = new ReconciliationFake();
+    let providerCreations = 0;
+    const service = new DailySellerMetricsBackfillService(
+      reconciliation as never,
+      new ResolverFake() as never,
+      persistence as never,
+      () => {
+        providerCreations += 1;
+        return {
+          getFinancialEvidence: async () => financialReport('2026-09-03'),
+        } as never;
+      },
+    );
+    const currentDayParams = params({
+      from: '2026-09-03',
+      to: '2026-09-03',
+      geFinanceDays: [DAILY_DAYS[2]!],
+      currentDate: '2026-09-03',
+    });
+
+    const safePlan = await service.preflight(currentDayParams);
+    const safeResult = await service.execute({
+      ...currentDayParams,
+      plan: safePlan,
+    });
+    assert.equal(safePlan.currentDayIgnored, 1);
+    assert.equal(safePlan.externalProcessingDays, 0);
+    assert.equal(safePlan.days[0]?.action, 'CURRENT_DAY_IGNORED');
+    assert.equal(safeResult.currentDayIgnored, 1);
+    assert.equal(providerCreations, 0);
+    assert.equal(reconciliation.calls.length, 0);
+    assert.equal(persistence.metadata.length, 0);
+    assert.equal(persistence.localRefreshes.length, 0);
+
+    const overridePlan = await service.preflight({
+      ...currentDayParams,
+      includeToday: true,
+    });
+    const overrideResult = await service.execute({
+      ...currentDayParams,
+      includeToday: true,
+      plan: overridePlan,
+    });
+    assert.equal(overridePlan.currentDayIgnored, 0);
+    assert.equal(overridePlan.externalProcessingDays, 1);
+    assert.equal(overridePlan.days[0]?.action, 'FULL_EXTERNAL_PROCESS');
+    assert.equal(overrideResult.created, 1);
+    assert.deepEqual(reconciliation.completedDates, ['2026-09-03']);
   });
 
   it('blocks a legacy snapshot before provider creation or external reconciliation', async () => {
@@ -343,7 +410,14 @@ class ReconciliationFake {
       );
     }
     this.completedDates.push(call.date);
-    return { date: call.date, timeZone: 'America/Sao_Paulo' };
+    return {
+      date: call.date,
+      timeZone: 'America/Sao_Paulo',
+      geFinanceMargin: {
+        generalAmount: '20',
+        generalBaseAmount: '100',
+      },
+    };
   }
 }
 
@@ -364,6 +438,12 @@ class PersistenceFake {
     geFinanceDailySha256: string | null;
   }> = [];
   findExistingSnapshotsCalls = 0;
+  readonly localRefreshes: Array<{
+    businessDate: string;
+    marginRate: Prisma.Decimal;
+    marginAmount: Prisma.Decimal;
+    marginBaseAmount: Prisma.Decimal;
+  }> = [];
 
   constructor(
     private readonly actions: Map<string, 'CREATED' | 'UPDATED'>,
@@ -373,6 +453,28 @@ class PersistenceFake {
   async findExistingSnapshots() {
     this.findExistingSnapshotsCalls += 1;
     return new Map(this.existing);
+  }
+
+  async refreshGeFinanceMetrics(input: {
+    businessDate: string;
+    geFinanceReportSha256: string;
+    geFinanceDailySha256: string;
+    marginRate: Prisma.Decimal;
+    marginAmount: Prisma.Decimal;
+    marginBaseAmount: Prisma.Decimal;
+  }) {
+    this.localRefreshes.push(input);
+    return {
+      marketplaceAccountId: MARKETPLACE_ACCOUNT_ID,
+      businessDate: input.businessDate,
+      timezone: 'America/Sao_Paulo',
+      action: 'UPDATED',
+      calculatedAt: '2026-09-22T12:00:00.000Z',
+      geFinanceReportSha256: input.geFinanceReportSha256,
+      geFinanceDailySha256: input.geFinanceDailySha256,
+      metricCount: 2,
+      unavailableMetrics: [],
+    };
   }
 
   async persist(
@@ -396,6 +498,48 @@ class PersistenceFake {
       unavailableMetrics: [],
     };
   }
+}
+
+function financialReport(
+  date: string,
+  margin = '10',
+  base = '100',
+) {
+  const decimal = (value: string) => new Prisma.Decimal(value);
+  const zero = decimal('0');
+  return {
+    source: 'GEFINANCE_REPORT' as const,
+    date,
+    marginDefinition: {
+      amountColumn: 'Margem',
+      baseColumn: 'Total prod. vendidos',
+      reportedRateColumn: '% sobre Venda',
+    },
+    records: [
+      {
+        soldOn: date,
+        orderReference: 'not-used-by-local-refresh',
+        channel: {
+          original: 'Mercado Livre Fulfillment C2',
+          normalized: 'MERCADO_LIVRE_FULFILLMENT_C2' as const,
+        },
+        status: 'Entregue',
+        productSoldAmount: decimal(base),
+        discountAmount: zero,
+        totalProductsSoldAmount: decimal(base),
+        customerShippingAmount: zero,
+        totalSaleAmount: decimal(base),
+        productCostAmount: zero,
+        feesAndCommissionsAmount: zero,
+        taxAmount: zero,
+        netAmount: zero,
+        marginAmount: decimal(margin),
+        reportedMarginRate: zero,
+        marginBaseAmount: decimal(base),
+        isFinancialFulfillmentEvidence: true,
+      },
+    ],
+  };
 }
 
 function existingSnapshots(dates: readonly string[]): Map<string, ExistingSnapshot> {

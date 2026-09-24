@@ -73,7 +73,11 @@ describe('SellerMetricsReconciliationService', () => {
     assert.equal(metric(report.general, 'grossSales', 'GEFINANCE_XLSX').value, '151.00');
     assert.equal(metric(report.general, 'visits', 'MERCADO_LIVRE_OFFICIAL').value, 1739);
 
+    assert.equal(report.geFinanceMargin.generalAmount, '24.11');
+    assert.equal(report.geFinanceMargin.generalBaseAmount, '151');
     assert.equal(report.geFinanceMargin.generalRate, '15.9668874172');
+    assert.equal(report.geFinanceMargin.fullAmount, '1.04');
+    assert.equal(report.geFinanceMargin.fullBaseAmount, '10.4');
     assert.equal(report.geFinanceMargin.fullRate, '10');
     assert.equal(metric(report.full.evidence, 'salesCount', 'MERCADO_LIVRE_OFFICIAL').value, 1);
     assert.equal(metric(report.full.evidence, 'unitsSold', 'MERCADO_LIVRE_OFFICIAL').value, 2);

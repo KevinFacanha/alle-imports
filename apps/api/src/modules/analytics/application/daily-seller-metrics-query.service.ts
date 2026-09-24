@@ -84,6 +84,53 @@ export interface MarketplaceAccountSummaryResponse {
   marketplace: string;
 }
 
+export type ComparisonDayStatus =
+  | 'AVAILABLE'
+  | 'PARTIAL'
+  | 'MISSING_SNAPSHOT';
+
+export type ComparisonMarginRateStatus =
+  | 'AVAILABLE'
+  | 'UNAVAILABLE_COMPONENTS'
+  | 'UNAVAILABLE_ZERO_BASE'
+  | 'NO_SNAPSHOTS';
+
+export interface SellerMetricsComparisonDayResponse {
+  date: string;
+  grossSales: string | null;
+  marginRate: string | null;
+  fullGrossSales: string | null;
+  averageTicket: string | null;
+  salesCount: string | null;
+  fullSalesCount: string | null;
+  snapshotAvailable: boolean;
+  status: ComparisonDayStatus;
+}
+
+export interface SellerMetricsComparisonAccountResponse {
+  marketplaceAccountId: string;
+  name: string;
+  summary: {
+    grossSales: string | null;
+    fullGrossSales: string | null;
+    salesCount: string | null;
+    fullSalesCount: string | null;
+    averageTicket: string | null;
+    marginRate: string | null;
+    marginRateStatus: ComparisonMarginRateStatus;
+  };
+  days: SellerMetricsComparisonDayResponse[];
+  availableDays: number;
+  missingDays: number;
+  expectedDays: number;
+}
+
+export interface SellerMetricsComparisonResponse {
+  from: string;
+  to: string;
+  accounts: SellerMetricsComparisonAccountResponse[];
+}
+
 const snapshotSelection = Prisma.validator<Prisma.DailySellerMetricsSelect>()({
   marketplaceAccountId: true,
   businessDate: true,
@@ -173,6 +220,59 @@ export class DailySellerMetricsQueryService {
       from,
       to,
       days: snapshots.map(serializeSnapshot),
+    };
+  }
+
+  async findComparison(
+    accountAId: string,
+    accountBId: string,
+    from: string,
+    to: string,
+  ): Promise<SellerMetricsComparisonResponse> {
+    const fromDate = dateOnly(from);
+    const toDate = dateOnly(to);
+    validateRange(fromDate, toDate);
+    if (accountAId === accountBId) {
+      throw new BadRequestException('accountAId and accountBId must be different.');
+    }
+
+    const accountIds = [accountAId, accountBId];
+    const accounts = await this.database.marketplaceAccount.findMany({
+      where: { id: { in: accountIds } },
+      select: { id: true, name: true },
+    });
+    const accountsById = new Map(accounts.map((account) => [account.id, account]));
+    if (accountsById.size !== accountIds.length) {
+      throw new NotFoundException('Marketplace account not found.');
+    }
+
+    const snapshots = await this.database.dailySellerMetrics.findMany({
+      where: {
+        marketplaceAccountId: { in: accountIds },
+        businessDate: { gte: fromDate, lte: toDate },
+      },
+      orderBy: [
+        { marketplaceAccountId: 'asc' },
+        { businessDate: 'asc' },
+      ],
+      select: snapshotSelection,
+    });
+    const dates = comparisonDates(fromDate, toDate);
+
+    return {
+      from,
+      to,
+      accounts: accountIds.map((marketplaceAccountId) => {
+        const account = accountsById.get(marketplaceAccountId)!;
+        return serializeComparisonAccount(
+          account,
+          snapshots.filter(
+            (snapshot) =>
+              snapshot.marketplaceAccountId === marketplaceAccountId,
+          ),
+          dates,
+        );
+      }),
     };
   }
 
@@ -267,6 +367,195 @@ function safeDecimalText(value: Prisma.JsonValue | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+type ComparisonMetricName =
+  | 'GROSS_SALES'
+  | 'MARGIN_RATE'
+  | 'FULL_GROSS_SALES'
+  | 'AVERAGE_TICKET'
+  | 'SALES_COUNT'
+  | 'FULL_SALES_COUNT';
+
+function serializeComparisonAccount(
+  account: { id: string; name: string },
+  snapshots: PersistedSnapshot[],
+  dates: string[],
+): SellerMetricsComparisonAccountResponse {
+  const snapshotsByDate = new Map(
+    snapshots.map((snapshot) => [
+      snapshot.businessDate.toISOString().slice(0, 10),
+      snapshot,
+    ]),
+  );
+  const days = dates.map((date) => {
+    const snapshot = snapshotsByDate.get(date);
+    if (!snapshot) {
+      return {
+        date,
+        grossSales: null,
+        marginRate: null,
+        fullGrossSales: null,
+        averageTicket: null,
+        salesCount: null,
+        fullSalesCount: null,
+        snapshotAvailable: false,
+        status: 'MISSING_SNAPSHOT' as const,
+      };
+    }
+    const values = {
+      grossSales: comparisonMetricValue(snapshot, 'GROSS_SALES'),
+      marginRate: comparisonMetricValue(snapshot, 'MARGIN_RATE'),
+      fullGrossSales: comparisonMetricValue(snapshot, 'FULL_GROSS_SALES'),
+      averageTicket: comparisonMetricValue(snapshot, 'AVERAGE_TICKET'),
+      salesCount: comparisonMetricValue(snapshot, 'SALES_COUNT'),
+      fullSalesCount: comparisonMetricValue(snapshot, 'FULL_SALES_COUNT'),
+    };
+    return {
+      date,
+      ...values,
+      snapshotAvailable: true,
+      status: Object.values(values).every((value) => value !== null)
+        ? ('AVAILABLE' as const)
+        : ('PARTIAL' as const),
+    };
+  });
+
+  const grossSales = sumComparisonMetric(snapshots, 'GROSS_SALES');
+  const salesCount = sumComparisonMetric(snapshots, 'SALES_COUNT');
+  const margin = aggregateMargin(snapshots);
+  return {
+    marketplaceAccountId: account.id,
+    name: account.name,
+    summary: {
+      grossSales: decimalText(grossSales),
+      fullGrossSales: decimalText(
+        sumComparisonMetric(snapshots, 'FULL_GROSS_SALES'),
+      ),
+      salesCount: decimalText(salesCount),
+      fullSalesCount: decimalText(
+        sumComparisonMetric(snapshots, 'FULL_SALES_COUNT'),
+      ),
+      averageTicket:
+        grossSales === null || salesCount === null || salesCount.isZero()
+          ? null
+          : grossSales.dividedBy(salesCount).toString(),
+      marginRate: margin.value,
+      marginRateStatus: margin.status,
+    },
+    days,
+    availableDays: snapshots.length,
+    missingDays: dates.length - snapshots.length,
+    expectedDays: dates.length,
+  };
+}
+
+function comparisonMetricValue(
+  snapshot: PersistedSnapshot,
+  name: ComparisonMetricName,
+): string | null {
+  const metric = snapshot.metrics.find((candidate) => candidate.name === name);
+  return metric?.value === null || metric?.value === undefined
+    ? null
+    : metric.value.toString();
+}
+
+function sumComparisonMetric(
+  snapshots: PersistedSnapshot[],
+  name: ComparisonMetricName,
+): Prisma.Decimal | null {
+  const values = snapshots.flatMap((snapshot) => {
+    const value = comparisonMetricValue(snapshot, name);
+    return value === null ? [] : [new Prisma.Decimal(value)];
+  });
+  if (values.length === 0) return null;
+  return values.reduce(
+    (sum, value) => sum.plus(value),
+    new Prisma.Decimal(0),
+  );
+}
+
+function aggregateMargin(snapshots: PersistedSnapshot[]): {
+  value: string | null;
+  status: ComparisonMarginRateStatus;
+} {
+  if (snapshots.length === 0) return { value: null, status: 'NO_SNAPSHOTS' };
+
+  let amount = new Prisma.Decimal(0);
+  let baseAmount = new Prisma.Decimal(0);
+  for (const snapshot of snapshots) {
+    const metric = snapshot.metrics.find(
+      (candidate) => candidate.name === 'MARGIN_RATE',
+    );
+    const components = marginComponents(metric?.validationEvidence);
+    if (!components) {
+      return { value: null, status: 'UNAVAILABLE_COMPONENTS' };
+    }
+    amount = amount.plus(components.amount);
+    baseAmount = baseAmount.plus(components.baseAmount);
+  }
+  if (baseAmount.isZero()) {
+    return { value: null, status: 'UNAVAILABLE_ZERO_BASE' };
+  }
+  return {
+    value: amount
+      .dividedBy(baseAmount)
+      .mul(100)
+      .toDecimalPlaces(10)
+      .toString(),
+    status: 'AVAILABLE',
+  };
+}
+
+function marginComponents(value: Prisma.JsonValue | undefined): {
+  amount: Prisma.Decimal;
+  baseAmount: Prisma.Decimal;
+} | null {
+  if (!Array.isArray(value)) return null;
+  const amounts = value.flatMap((entry) =>
+    marginComponent(entry, 'MARGIN_AMOUNT'),
+  );
+  const bases = value.flatMap((entry) =>
+    marginComponent(entry, 'MARGIN_BASE_AMOUNT'),
+  );
+  if (amounts.length !== 1 || bases.length !== 1) return null;
+  return { amount: amounts[0]!, baseAmount: bases[0]! };
+}
+
+function marginComponent(
+  entry: Prisma.JsonValue,
+  component: 'MARGIN_AMOUNT' | 'MARGIN_BASE_AMOUNT',
+): Prisma.Decimal[] {
+  if (
+    !isJsonObject(entry) ||
+    entry.component !== component ||
+    entry.source !== 'GEFINANCE' ||
+    entry.status !== 'AVAILABLE' ||
+    (typeof entry.value !== 'string' && typeof entry.value !== 'number')
+  ) {
+    return [];
+  }
+  try {
+    return [new Prisma.Decimal(entry.value)];
+  } catch {
+    return [];
+  }
+}
+
+function decimalText(value: Prisma.Decimal | null): string | null {
+  return value?.toString() ?? null;
+}
+
+function comparisonDates(from: Date, to: Date): string[] {
+  const dates: string[] = [];
+  for (
+    let instant = from.getTime();
+    instant <= to.getTime();
+    instant += 86_400_000
+  ) {
+    dates.push(new Date(instant).toISOString().slice(0, 10));
+  }
+  return dates;
 }
 
 function dateOnly(value: string): Date {

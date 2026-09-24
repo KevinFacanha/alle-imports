@@ -239,6 +239,65 @@ describe('GeFinanceReportProvider', () => {
     assert.equal(await dailyHash(numeric), await dailyHash(formatted));
   });
 
+  it('does not change the daily hash for operational fields irrelevant to BI', async () => {
+    const first = await reportFile([
+      row({
+        orderReference: 'ORDER-A',
+        status: 'Entregue',
+        productCostAmount: 10,
+        productSoldAmount: 123,
+        discountAmount: -99,
+        customerShippingAmount: 5,
+        totalSaleAmount: 321,
+        feesAndCommissionsAmount: -2,
+        taxAmount: -1,
+        netAmount: 82,
+        reportedMarginRate: 0.1,
+      }),
+    ]);
+    const changedOnlyOutsideBi = await reportFile([
+      row({
+        orderReference: 'ORDER-B',
+        status: 'Cancelado',
+        productCostAmount: 999,
+        productSoldAmount: 987,
+        discountAmount: -88,
+        customerShippingAmount: 777,
+        totalSaleAmount: 789,
+        feesAndCommissionsAmount: -555,
+        taxAmount: -444,
+        netAmount: -333,
+        reportedMarginRate: 0.999,
+      }),
+    ]);
+
+    assert.equal(await dailyHash(first), await dailyHash(changedOnlyOutsideBi));
+  });
+
+  it('hashes channel aggregates instead of row identities or distribution', async () => {
+    const split = await reportFile([
+      row({
+        orderReference: 'A',
+        totalProductsSoldAmount: 40,
+        marginAmount: 4,
+      }),
+      row({
+        orderReference: 'B',
+        totalProductsSoldAmount: 60,
+        marginAmount: 6,
+      }),
+    ]);
+    const consolidated = await reportFile([
+      row({
+        orderReference: 'C',
+        totalProductsSoldAmount: 100,
+        marginAmount: 10,
+      }),
+    ]);
+
+    assert.equal(await dailyHash(split), await dailyHash(consolidated));
+  });
+
   it('excludes PII columns and values from the daily hash', async () => {
     const headers = [...requiredHeaders(), ...PII_HEADERS];
     const first = await reportFile(

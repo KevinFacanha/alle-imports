@@ -102,7 +102,11 @@ export interface SellerMetricsReconciliationReport {
   };
   geFinanceMargin: {
     formula: 'SUM(Margem) / SUM(Total prod. vendidos)';
+    generalAmount: string;
+    generalBaseAmount: string;
     generalRate: string | null;
+    fullAmount: string;
+    fullBaseAmount: string;
     fullRate: string | null;
   };
   matching: {
@@ -450,7 +454,13 @@ export class SellerMetricsReconciliationService {
       },
       geFinanceMargin: {
         formula: 'SUM(Margem) / SUM(Total prod. vendidos)',
+        generalAmount: financialSummary.aggregateMargin.amount.toString(),
+        generalBaseAmount:
+          financialSummary.aggregateMargin.baseAmount.toString(),
         generalRate: serializeRate(financialSummary.aggregateMargin.rate),
+        fullAmount: fullFinancialSummary.aggregateMargin.amount.toString(),
+        fullBaseAmount:
+          fullFinancialSummary.aggregateMargin.baseAmount.toString(),
         fullRate: serializeRate(fullFinancialSummary.aggregateMargin.rate),
       },
       matching: buildSafeMatching(inspection, financial),

@@ -241,42 +241,54 @@ export class GeFinanceReportProvider implements FinancialEvidenceProvider {
 }
 
 /**
- * Hashes only the allowlisted financial/technical record fields. Canonical
- * JSON rows are sorted so worksheet row order cannot affect the digest.
+ * Hashes only aggregates that can change persisted BI values or validation
+ * evidence. The grouping and canonical sort make the digest independent from
+ * worksheet row order, while Decimal serialization removes formatting noise.
  */
 export function geFinanceDailySha256(
   records: readonly FinancialEvidenceRecord[],
 ): string {
-  const canonicalRows = records.map(canonicalHashRow).sort();
+  const aggregates = new Map<
+    string,
+    {
+      businessDate: string;
+      channel: FinancialChannelCode;
+      totalProductsSoldAmount: Prisma.Decimal;
+      marginAmount: Prisma.Decimal;
+    }
+  >();
+  for (const record of records) {
+    const key = `${record.soldOn}\u0000${record.channel.normalized}`;
+    const current = aggregates.get(key) ?? {
+      businessDate: record.soldOn,
+      channel: record.channel.normalized,
+      totalProductsSoldAmount: new Prisma.Decimal(0),
+      marginAmount: new Prisma.Decimal(0),
+    };
+    current.totalProductsSoldAmount = current.totalProductsSoldAmount.plus(
+      record.totalProductsSoldAmount,
+    );
+    current.marginAmount = current.marginAmount.plus(record.marginAmount);
+    aggregates.set(key, current);
+  }
+  const canonicalAggregates = [...aggregates.values()]
+    .sort((left, right) =>
+      `${left.businessDate}\u0000${left.channel}`.localeCompare(
+        `${right.businessDate}\u0000${right.channel}`,
+      ),
+    )
+    .map((aggregate) => [
+      aggregate.businessDate,
+      aggregate.channel,
+      canonicalDecimal(aggregate.totalProductsSoldAmount),
+      canonicalDecimal(aggregate.marginAmount),
+    ]);
   return createHash('sha256')
-    .update(JSON.stringify(['gefinance-daily-v1', canonicalRows]), 'utf8')
+    .update(
+      JSON.stringify(['gefinance-daily-bi-aggregates-v2', canonicalAggregates]),
+      'utf8',
+    )
     .digest('hex');
-}
-
-function canonicalHashRow(record: FinancialEvidenceRecord): string {
-  return JSON.stringify([
-    record.soldOn,
-    record.orderReference,
-    record.channel.original,
-    record.channel.normalized,
-    record.status,
-    record.sku ?? null,
-    record.productName ?? null,
-    record.quantity ?? null,
-    canonicalDecimal(record.productSoldAmount),
-    canonicalDecimal(record.discountAmount),
-    canonicalDecimal(record.totalProductsSoldAmount),
-    canonicalDecimal(record.customerShippingAmount),
-    canonicalDecimal(record.totalSaleAmount),
-    canonicalDecimal(record.productCostAmount),
-    canonicalDecimal(record.feesAndCommissionsAmount),
-    canonicalDecimal(record.taxAmount),
-    canonicalDecimal(record.netAmount),
-    canonicalDecimal(record.marginAmount),
-    canonicalDecimal(record.reportedMarginRate),
-    canonicalDecimal(record.marginBaseAmount),
-    record.isFinancialFulfillmentEvidence,
-  ]);
 }
 
 function canonicalDecimal(value: Prisma.Decimal): string {

@@ -37,6 +37,17 @@ describe('DailySellerMetricsPersistenceService', () => {
     assert.equal(grossSales.source, 'MERCADO_LIVRE');
     assert.equal(grossSales.status, 'PROVISIONAL');
     assert.equal(grossSales.confidence, 'MEDIUM');
+    const marginEvidence = database.metric(ACCOUNT_ID, 'MARGIN_RATE')
+      .validationEvidence as unknown as Array<Record<string, unknown>>;
+    assert.deepEqual(
+      marginEvidence
+        .filter(({ component }) => component !== undefined)
+        .map(({ component, value }) => ({ component, value })),
+      [
+        { component: 'MARGIN_AMOUNT', value: '24' },
+        { component: 'MARGIN_BASE_AMOUNT', value: '150.31' },
+      ],
+    );
   });
 
   it('reprocesses the same account and date without duplicates and updates values', async () => {
@@ -162,6 +173,164 @@ describe('DailySellerMetricsPersistenceService', () => {
     assert.equal(database.executeRawCount, 1);
   });
 
+  it('backfills only margin components and is idempotent per account and date', async () => {
+    const database = new InMemoryDatabase();
+    const persistence = service(database);
+    await persistence.persist(resolved(), metadata());
+    await persistence.persist(resolved(), metadata(SECOND_ACCOUNT_ID));
+    const margin = database.metric(ACCOUNT_ID, 'MARGIN_RATE');
+    margin.validationEvidence = (margin.validationEvidence as Prisma.InputJsonArray)
+      .filter((entry) =>
+        typeof entry !== 'object' || entry === null || Array.isArray(entry) ||
+        !('component' in entry),
+      );
+    const protectedBefore = new Map(
+      [...database.metrics.entries()]
+        .filter(([key]) => !key.endsWith('|MARGIN_RATE'))
+        .map(([key, value]) => [key, JSON.stringify(value)]),
+    );
+    const calculatedAtBefore = database.snapshot(ACCOUNT_ID).calculatedAt.toISOString();
+
+    const first = await persistence.backfillGeFinanceMarginComponents({
+      marketplaceAccountId: ACCOUNT_ID,
+      businessDate: '2026-09-16',
+      marginAmount: new Prisma.Decimal('12.5'),
+      marginBaseAmount: new Prisma.Decimal('50'),
+    });
+    const evidence = database.metric(ACCOUNT_ID, 'MARGIN_RATE')
+      .validationEvidence as Prisma.InputJsonArray;
+    assert.equal(first, 'ENRICHED');
+    assert.deepEqual(
+      evidence.flatMap((entry) =>
+        typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+        'component' in entry
+          ? [{ component: entry.component, value: entry.value }]
+          : [],
+      ),
+      [
+        { component: 'MARGIN_AMOUNT', value: '12.5' },
+        { component: 'MARGIN_BASE_AMOUNT', value: '50' },
+      ],
+    );
+    for (const [key, before] of protectedBefore) {
+      assert.equal(JSON.stringify(database.metrics.get(key)), before);
+    }
+    assert.equal(
+      database.snapshot(ACCOUNT_ID).calculatedAt.toISOString(),
+      calculatedAtBefore,
+    );
+
+    const repeated = await persistence.backfillGeFinanceMarginComponents({
+      marketplaceAccountId: ACCOUNT_ID,
+      businessDate: '2026-09-16',
+      marginAmount: new Prisma.Decimal('12.5'),
+      marginBaseAmount: new Prisma.Decimal('50'),
+    });
+    assert.equal(repeated, 'UNCHANGED');
+    assert.equal(
+      (database.metric(ACCOUNT_ID, 'MARGIN_RATE').validationEvidence as Prisma.InputJsonArray)
+        .filter((entry) =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+          'component' in entry,
+        ).length,
+      2,
+    );
+  });
+
+  it('refreshes only GeFinance-owned values/evidence and preserves ML, Olist and derived values', async () => {
+    const database = new InMemoryDatabase();
+    const persistence = service(database);
+    const input = resolved();
+    input.metrics.fullGrossSales.validationEvidence = [
+      {
+        metric: 'fullGrossSales',
+        source: 'OLIST',
+        value: '48.90',
+        status: 'PROVISIONAL',
+        comparison: 'PRIMARY',
+        semantic: 'SUM(Olist totalProdutos), channel Mercado Livre Fulfillment',
+        absoluteDifference: null,
+        percentageDifference: null,
+        notes: 'Primary Olist evidence.',
+      },
+      {
+        metric: 'fullGrossSales',
+        source: 'GEFINANCE',
+        value: '40.00',
+        status: 'AVAILABLE',
+        comparison: 'DIVERGENT',
+        semantic: 'old',
+        absoluteDifference: '8.9',
+        percentageDifference: '18.2004',
+        notes: 'Old GeFinance evidence.',
+      },
+    ];
+    await persistence.persist(input, metadata());
+    const preserved = new Map(
+      ['SALES_COUNT', 'UNITS_SOLD', 'GROSS_SALES', 'FULL_SALES_COUNT',
+       'FULL_UNITS_SOLD', 'VISITS', 'AVERAGE_TICKET', 'CONVERSION_RATE']
+        .map((name) => [name, JSON.stringify(database.metric(ACCOUNT_ID, name))]),
+    );
+    const fullGrossBefore = database.metric(ACCOUNT_ID, 'FULL_GROSS_SALES');
+
+    const result = await persistence.refreshGeFinanceMetrics({
+      marketplaceAccountId: ACCOUNT_ID,
+      businessDate: '2026-09-16',
+      geFinanceReportSha256: 'e'.repeat(64),
+      geFinanceDailySha256: 'f'.repeat(64),
+      marginRate: new Prisma.Decimal('0.25'),
+      marginAmount: new Prisma.Decimal('12.5'),
+      marginBaseAmount: new Prisma.Decimal('50'),
+      fullGrossSalesEvidenceAmount: new Prisma.Decimal('50.25'),
+      calculatedAt: new Date('2026-09-17T10:00:00.000Z'),
+    });
+
+    assert.equal(result.action, 'UPDATED');
+    assert.equal(decimalValue(database.metric(ACCOUNT_ID, 'MARGIN_RATE')).toString(), '25');
+    assert.equal(database.metric(ACCOUNT_ID, 'MARGIN_RATE').source, 'GEFINANCE');
+    for (const [name, before] of preserved) {
+      assert.equal(JSON.stringify(database.metric(ACCOUNT_ID, name)), before);
+    }
+    const fullGrossAfter = database.metric(ACCOUNT_ID, 'FULL_GROSS_SALES');
+    assert.equal(fullGrossAfter.value?.toString(), fullGrossBefore.value?.toString());
+    assert.equal(fullGrossAfter.source, 'OLIST');
+    assert.equal(fullGrossAfter.status, 'PROVISIONAL');
+    assert.equal(fullGrossAfter.confidence, 'MEDIUM');
+    const evidence = fullGrossAfter.validationEvidence as unknown as Array<Record<string, unknown>>;
+    assert.equal(evidence.filter(({ source }) => source === 'GEFINANCE').length, 1);
+    assert.equal(evidence.find(({ source }) => source === 'GEFINANCE')?.value, '50.25');
+    assert.equal(evidence.find(({ source }) => source === 'OLIST')?.notes, 'Primary Olist evidence.');
+    assert.equal(database.snapshot(ACCOUNT_ID).geFinanceDailySha256, 'f'.repeat(64));
+  });
+
+  it('rolls back the complete local GeFinance refresh when one metric update fails', async () => {
+    const database = new InMemoryDatabase();
+    const persistence = service(database);
+    await persistence.persist(resolved(), metadata());
+    const marginBefore = JSON.stringify(database.metric(ACCOUNT_ID, 'MARGIN_RATE'));
+    const fullBefore = JSON.stringify(database.metric(ACCOUNT_ID, 'FULL_GROSS_SALES'));
+    const snapshotBefore = JSON.stringify(database.snapshot(ACCOUNT_ID));
+    database.failMetricUpdate = true;
+
+    await assert.rejects(
+      persistence.refreshGeFinanceMetrics({
+        marketplaceAccountId: ACCOUNT_ID,
+        businessDate: '2026-09-16',
+        geFinanceReportSha256: 'e'.repeat(64),
+        geFinanceDailySha256: 'f'.repeat(64),
+        marginRate: new Prisma.Decimal('0.5'),
+        marginAmount: new Prisma.Decimal('30'),
+        marginBaseAmount: new Prisma.Decimal('60'),
+        fullGrossSalesEvidenceAmount: new Prisma.Decimal('60'),
+      }),
+      /simulated local refresh failure/,
+    );
+
+    assert.equal(JSON.stringify(database.metric(ACCOUNT_ID, 'MARGIN_RATE')), marginBefore);
+    assert.equal(JSON.stringify(database.metric(ACCOUNT_ID, 'FULL_GROSS_SALES')), fullBefore);
+    assert.equal(JSON.stringify(database.snapshot(ACCOUNT_ID)), snapshotBefore);
+  });
+
   it('persists all Full metrics with their own provenance', async () => {
     const database = new InMemoryDatabase();
     await service(database).persist(resolved(), metadata());
@@ -248,6 +417,8 @@ function metadata(marketplaceAccountId = ACCOUNT_ID) {
     marketplaceAccountId,
     geFinanceReportSha256: REPORT_HASH,
     geFinanceDailySha256: DAILY_HASH,
+    geFinanceMarginAmount: '24',
+    geFinanceMarginBaseAmount: '150.31',
     calculatedAt: new Date('2026-09-16T20:00:00.000Z'),
   };
 }
@@ -343,6 +514,7 @@ class InMemoryDatabase {
   transactionCount = 0;
   transactionOptions: { maxWait?: number; timeout?: number } | undefined;
   failCreateMany = false;
+  failMetricUpdate = false;
   findManyCount = 0;
   executeRawCount = 0;
   lastRawSql: string | undefined;
@@ -423,9 +595,24 @@ class InMemoryDatabase {
   ) {
     return {
       dailySellerMetrics: {
-        findUnique: async (args: SnapshotIdentity) => {
+        findUnique: async (args: SnapshotIdentity & { select?: { metrics?: unknown } }) => {
           const found = snapshots.get(snapshotKey(args));
-          return found ? { id: found.id } : null;
+          if (!found) return null;
+          if (!args.select?.metrics) return { id: found.id };
+          return {
+            id: found.id,
+            timezone: found.timezone,
+            metrics: [...metrics.values()].filter(
+              (metric) =>
+                metric.dailySellerMetricsId === found.id &&
+                (metric.name === 'MARGIN_RATE' || metric.name === 'FULL_GROSS_SALES'),
+            ),
+          };
+        },
+        update: async (args: { where: { id: string }; data: Partial<StoredSnapshot> }) => {
+          const entry = [...snapshots.entries()].find(([, value]) => value.id === args.where.id);
+          assert.ok(entry);
+          snapshots.set(entry[0], { ...entry[1], ...args.data });
         },
         upsert: async (
           args: SnapshotIdentity & {
@@ -443,6 +630,24 @@ class InMemoryDatabase {
         },
       },
       dailySellerMetric: {
+        update: async (args: {
+          where: {
+            dailySellerMetricsId_name: {
+              dailySellerMetricsId: string;
+              name: string;
+            };
+          };
+          data: Partial<StoredMetric>;
+        }) => {
+          const identity = args.where.dailySellerMetricsId_name;
+          const key = `${identity.dailySellerMetricsId}|${identity.name}`;
+          const current = metrics.get(key);
+          assert.ok(current);
+          if (this.failMetricUpdate && identity.name === 'FULL_GROSS_SALES') {
+            throw new Error('simulated local refresh failure');
+          }
+          metrics.set(key, { ...current, ...args.data });
+        },
         deleteMany: async (args: { where: { dailySellerMetricsId: string } }) => {
           for (const [key, value] of metrics) {
             if (value.dailySellerMetricsId === args.where.dailySellerMetricsId) {

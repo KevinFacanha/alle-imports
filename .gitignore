@@ -23,3 +23,5 @@ apps/api/.local-fixtures/gefinance/
 **/gefinance-report*.xlsx
 **/geinsights_*.xlsx
 .DS_Store
+
+*.orig

@@ -53,6 +53,9 @@ async function main(): Promise<void> {
       .persist(resolved, {
         marketplaceAccountId: args.marketplaceAccountId,
         geFinanceReportSha256,
+        geFinanceMarginAmount: reconciliation.geFinanceMargin.generalAmount,
+        geFinanceMarginBaseAmount:
+          reconciliation.geFinanceMargin.generalBaseAmount,
       });
 
     const metrics = Object.fromEntries(

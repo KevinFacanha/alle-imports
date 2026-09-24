@@ -38,6 +38,7 @@ export interface SellerBiMetricValidationEvidence {
   metric: SellerBiMetricName;
   source: Exclude<SellerBiMetricSource, 'DERIVED'>;
   value: SellerBiMetricValue;
+  component?: 'MARGIN_AMOUNT' | 'MARGIN_BASE_AMOUNT';
   status: SellerBiMetricStatus;
   comparison: SellerBiMetricValidationComparison;
   semantic: string;

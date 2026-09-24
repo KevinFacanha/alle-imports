@@ -255,7 +255,11 @@ function reconciliation(): SellerMetricsReconciliationResult {
     },
     geFinanceMargin: {
       formula: 'SUM(Margem) / SUM(Total prod. vendidos)',
+      generalAmount: '24',
+      generalBaseAmount: '150.31',
       generalRate: '15.9668874172',
+      fullAmount: '1.04',
+      fullBaseAmount: '10.4',
       fullRate: '10',
     },
     matching: {

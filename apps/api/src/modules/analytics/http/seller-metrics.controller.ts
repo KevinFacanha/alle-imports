@@ -5,10 +5,12 @@ import {
   DailySellerMetricsRangeResponse,
   DailySellerMetricsResponse,
   MarketplaceAccountSummaryResponse,
+  SellerMetricsComparisonResponse,
 } from '../application/daily-seller-metrics-query.service.js';
 import {
   DailySellerMetricsQueryDto,
   DailySellerMetricsRangeQueryDto,
+  SellerMetricsComparisonQueryDto,
 } from './seller-metrics-query.dto.js';
 
 @Controller('analytics/seller-metrics')
@@ -18,6 +20,18 @@ export class SellerMetricsController {
   @Get('accounts')
   findAccounts(): Promise<MarketplaceAccountSummaryResponse[]> {
     return this.queryService.findActiveAccounts();
+  }
+
+  @Get('comparison')
+  findComparison(
+    @Query() query: SellerMetricsComparisonQueryDto,
+  ): Promise<SellerMetricsComparisonResponse> {
+    return this.queryService.findComparison(
+      query.accountAId,
+      query.accountBId,
+      query.from,
+      query.to,
+    );
   }
 
   @Get('daily')

@@ -11,6 +11,22 @@ export class DailySellerMetricsQueryDto {
   date!: string;
 }
 
+export class SellerMetricsComparisonQueryDto {
+  @IsUUID()
+  accountAId!: string;
+
+  @IsUUID()
+  accountBId!: string;
+
+  @Matches(DATE_ONLY_PATTERN, { message: 'from must use YYYY-MM-DD' })
+  @IsDateString({ strict: true }, { message: 'from must be a valid date' })
+  from!: string;
+
+  @Matches(DATE_ONLY_PATTERN, { message: 'to must use YYYY-MM-DD' })
+  @IsDateString({ strict: true }, { message: 'to must be a valid date' })
+  to!: string;
+}
+
 export class DailySellerMetricsRangeQueryDto {
   @IsUUID()
   marketplaceAccountId!: string;

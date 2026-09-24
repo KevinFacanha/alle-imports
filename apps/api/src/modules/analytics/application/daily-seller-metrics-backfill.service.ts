@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 
+import { summarizeFinancialEvidence } from '../../finance/application/financial-evidence-summary.js';
 import { FinancialEvidenceProvider } from '../../finance/domain/financial-evidence.provider.js';
 import { GeFinanceReportDayInspection } from '../../integrations/gefinance/gefinance-report.provider.js';
 import {
@@ -24,10 +25,38 @@ export interface DailySellerMetricsBackfillParams {
   geFinanceDays?: readonly GeFinanceReportDayInspection[];
   geFinanceProvider?: FinancialEvidenceProvider;
   onProgress?: (progress: DailySellerMetricsBackfillProgress) => void;
+  plan?: DailySellerMetricsBackfillPlan;
+  includeToday?: boolean;
+  currentDate?: string;
+}
+
+export type DailySellerMetricsBackfillAction =
+  | 'SKIPPED'
+  | 'GEFINANCE_LOCAL_REFRESH'
+  | 'FULL_EXTERNAL_PROCESS'
+  | 'CURRENT_DAY_IGNORED';
+
+export interface DailySellerMetricsBackfillPlan {
+  daysFound: number;
+  skipped: number;
+  localRefreshDays: number;
+  externalProcessingDays: number;
+  currentDayIgnored: number;
+  days: ReadonlyArray<{
+    date: string;
+    sha256: string | null;
+    action: DailySellerMetricsBackfillAction;
+  }>;
 }
 
 export type DailySellerMetricsBackfillProgress =
-  | { index: number; total: number; date: string; state: 'PROCESSING' }
+  | {
+      index: number;
+      total: number;
+      date: string;
+      state: 'PROCESSING';
+      processing: 'LOCAL' | 'EXTERNAL';
+    }
   | {
       index: number;
       total: number;
@@ -39,7 +68,12 @@ export type DailySellerMetricsBackfillProgress =
 export interface DailySellerMetricsBackfillDayResult {
   date: string;
   status: 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
-  action: 'CREATED' | 'UPDATED' | 'FAILED' | 'SKIPPED';
+  action:
+    | 'CREATED'
+    | 'UPDATED'
+    | 'FAILED'
+    | 'SKIPPED'
+    | 'CURRENT_DAY_IGNORED';
   reason: string | null;
 }
 
@@ -48,7 +82,9 @@ export interface DailySellerMetricsBackfillSummary {
   to: string;
   daysFound: number;
   daysProcessed: number;
+  localRefreshDays: number;
   externalProcessingDays: number;
+  currentDayIgnored: number;
   created: number;
   updated: number;
   failed: number;
@@ -96,51 +132,33 @@ export class DailySellerMetricsBackfillService {
     params: DailySellerMetricsBackfillParams,
   ): Promise<DailySellerMetricsBackfillSummary> {
     validateParams(params);
-    const reportDays = reportDaysFor(params);
     const startedAt = Date.now();
     const days: DailySellerMetricsBackfillDayResult[] = [];
     const snapshots: DailySellerMetricsPersistenceSummary[] = [];
-
-    // One range query supplies every daily decision before any external work.
-    const existingSnapshots = await this.persistence.findExistingSnapshots({
-      marketplaceAccountId: params.marketplaceAccountId,
-      from: params.from,
-      to: params.to,
-    });
-    const plannedDays = reportDays.map(({ businessDate: date, sha256 }) => {
-      const existing = existingSnapshots.get(date);
-      const skip = sha256 !== null && existing?.geFinanceDailySha256 === sha256;
-      const legacy =
-        existing !== undefined && existing.geFinanceDailySha256 === null;
-      return { date, sha256, skip, legacy };
-    });
-    const legacyDates = plannedDays
-      .filter(({ legacy }) => legacy)
-      .map(({ date }) => date);
-    if (legacyDates.length > 0) {
-      throw new DailySellerMetricsBackfillError(
-        `Found ${legacyDates.length} legacy snapshot(s) without a daily hash. Run backfill:gefinance:daily-hashes before import:gefinance.`,
-      );
-    }
-    const externalProcessingDays = plannedDays.filter(({ skip }) => !skip).length;
+    const executionPlan = params.plan ?? (await this.preflight(params));
+    const plannedDays = executionPlan.days;
+    const geFinanceProcessingDays =
+      executionPlan.localRefreshDays + executionPlan.externalProcessingDays;
     const geFinanceProvider =
-      externalProcessingDays === 0
+      geFinanceProcessingDays === 0
         ? undefined
         : params.geFinanceProvider ??
           (this.geFinanceProviderFactory(
             params.geFinanceReportPath,
           ) as FinancialEvidenceProvider);
 
-    // Deliberately sequential: each local business day is an isolated unit of
-    // work and completes before the next day starts.
-    for (const [offset, plan] of plannedDays.entries()) {
-      const { date, sha256, skip } = plan;
+    // External days remain sequential. Local days use only the already loaded
+    // XLSX and one short atomic persistence transaction per snapshot.
+    for (const [offset, plannedDay] of plannedDays.entries()) {
+      const { date, sha256, action } = plannedDay;
       const index = offset + 1;
-      if (skip) {
+      if (action === 'SKIPPED' || action === 'CURRENT_DAY_IGNORED') {
+        const resultAction =
+          action === 'SKIPPED' ? 'SKIPPED' : 'CURRENT_DAY_IGNORED';
         days.push({
           date,
           status: 'SKIPPED',
-          action: 'SKIPPED',
+          action: resultAction,
           reason: null,
         });
         params.onProgress?.({
@@ -148,7 +166,7 @@ export class DailySellerMetricsBackfillService {
           total: plannedDays.length,
           date,
           state: 'COMPLETED',
-          action: 'SKIPPED',
+          action: resultAction,
         });
         continue;
       }
@@ -158,21 +176,59 @@ export class DailySellerMetricsBackfillService {
         total: plannedDays.length,
         date,
         state: 'PROCESSING',
+        processing:
+          action === 'GEFINANCE_LOCAL_REFRESH' ? 'LOCAL' : 'EXTERNAL',
       });
       try {
-        const reconciliation = await this.reconciliation.reconcile({
-          marketplaceAccountId: params.marketplaceAccountId,
-          olistAccountId: params.olistAccountId,
-          geFinanceReportPath: params.geFinanceReportPath,
-          geFinanceProvider: geFinanceProvider!,
-          date,
-        });
-        const resolved = this.resolver.resolve(reconciliation);
-        const snapshot = await this.persistence.persist(resolved, {
-          marketplaceAccountId: params.marketplaceAccountId,
-          geFinanceReportSha256: params.geFinanceReportSha256,
-          geFinanceDailySha256: sha256,
-        });
+        let snapshot: DailySellerMetricsPersistenceSummary;
+        if (action === 'GEFINANCE_LOCAL_REFRESH') {
+          const unfiltered = await geFinanceProvider!.getFinancialEvidence({
+            date,
+          });
+          const financial = {
+            ...unfiltered,
+            records: unfiltered.records.filter((record) =>
+              SUPPORTED_ACCOUNT_CHANNELS.has(record.channel.normalized),
+            ),
+          };
+          const fullFinancial = {
+            ...financial,
+            records: financial.records.filter((record) =>
+              FULL_CHANNELS.has(record.channel.normalized),
+            ),
+          };
+          const summary = summarizeFinancialEvidence(financial);
+          const fullSummary = summarizeFinancialEvidence(fullFinancial);
+          snapshot = await this.persistence.refreshGeFinanceMetrics({
+            marketplaceAccountId: params.marketplaceAccountId,
+            businessDate: date,
+            geFinanceReportSha256: params.geFinanceReportSha256,
+            geFinanceDailySha256: sha256!,
+            marginRate: summary.aggregateMargin.rate,
+            marginAmount: summary.aggregateMargin.amount,
+            marginBaseAmount: summary.aggregateMargin.baseAmount,
+            fullGrossSalesEvidenceAmount:
+              fullSummary.totals.totalProductsSoldAmount,
+          });
+        } else {
+          const reconciliation = await this.reconciliation.reconcile({
+            marketplaceAccountId: params.marketplaceAccountId,
+            olistAccountId: params.olistAccountId,
+            geFinanceReportPath: params.geFinanceReportPath,
+            geFinanceProvider: geFinanceProvider!,
+            date,
+          });
+          const resolved = this.resolver.resolve(reconciliation);
+          snapshot = await this.persistence.persist(resolved, {
+            marketplaceAccountId: params.marketplaceAccountId,
+            geFinanceReportSha256: params.geFinanceReportSha256,
+            geFinanceDailySha256: sha256,
+            geFinanceMarginAmount:
+              reconciliation.geFinanceMargin.generalAmount,
+            geFinanceMarginBaseAmount:
+              reconciliation.geFinanceMargin.generalBaseAmount,
+          });
+        }
         snapshots.push(snapshot);
         days.push({
           date,
@@ -208,8 +264,10 @@ export class DailySellerMetricsBackfillService {
       from: params.from,
       to: params.to,
       daysFound: plannedDays.length,
-      daysProcessed: externalProcessingDays,
-      externalProcessingDays,
+      daysProcessed: geFinanceProcessingDays,
+      localRefreshDays: executionPlan.localRefreshDays,
+      externalProcessingDays: executionPlan.externalProcessingDays,
+      currentDayIgnored: executionPlan.currentDayIgnored,
       created: days.filter(({ action }) => action === 'CREATED').length,
       updated: days.filter(({ action }) => action === 'UPDATED').length,
       failed: days.filter(({ action }) => action === 'FAILED').length,
@@ -219,6 +277,100 @@ export class DailySellerMetricsBackfillService {
       snapshots,
     };
   }
+
+  async preflight(
+    params: Pick<
+      DailySellerMetricsBackfillParams,
+      | 'marketplaceAccountId'
+      | 'from'
+      | 'to'
+      | 'geFinanceDays'
+      | 'includeToday'
+      | 'currentDate'
+    >,
+  ): Promise<DailySellerMetricsBackfillPlan> {
+    const reportDays = reportDaysFor(params);
+    const today = params.currentDate ?? saoPauloBusinessDate();
+    parseCalendarDate(today, 'businessDate');
+
+    // One local range query supplies every daily decision before any external
+    // provider is created or called.
+    const existingSnapshots = await this.persistence.findExistingSnapshots({
+      marketplaceAccountId: params.marketplaceAccountId,
+      from: params.from,
+      to: params.to,
+    });
+    const plannedDays = reportDays.map(({ businessDate: date, sha256 }) => {
+      const existing = existingSnapshots.get(date);
+      let action: DailySellerMetricsBackfillAction;
+      if (!params.includeToday && date >= today) {
+        action = 'CURRENT_DAY_IGNORED';
+      } else if (existing === undefined) {
+        action = 'FULL_EXTERNAL_PROCESS';
+      } else if (existing.geFinanceDailySha256 === null) {
+        action = 'GEFINANCE_LOCAL_REFRESH';
+      } else if (sha256 !== null && existing.geFinanceDailySha256 === sha256) {
+        action = 'SKIPPED';
+      } else {
+        action = 'GEFINANCE_LOCAL_REFRESH';
+      }
+      return { date, sha256, action, legacy: existing !== undefined && existing.geFinanceDailySha256 === null };
+    });
+    const legacyDates = plannedDays
+      .filter(
+        ({ legacy, action }) =>
+          legacy && action !== 'CURRENT_DAY_IGNORED',
+      )
+      .map(({ date }) => date);
+    if (legacyDates.length > 0) {
+      throw new DailySellerMetricsBackfillError(
+        `Found ${legacyDates.length} legacy snapshot(s) without a daily hash. Run backfill:gefinance:daily-hashes before import:gefinance.`,
+      );
+    }
+
+    const days = plannedDays.map(({ date, sha256, action }) => ({
+      date,
+      sha256,
+      action,
+    }));
+    return {
+      daysFound: days.length,
+      skipped: days.filter(({ action }) => action === 'SKIPPED').length,
+      localRefreshDays: days.filter(
+        ({ action }) => action === 'GEFINANCE_LOCAL_REFRESH',
+      ).length,
+      externalProcessingDays: days.filter(
+        ({ action }) => action === 'FULL_EXTERNAL_PROCESS',
+      ).length,
+      currentDayIgnored: days.filter(
+        ({ action }) => action === 'CURRENT_DAY_IGNORED',
+      ).length,
+      days,
+    };
+  }
+
+}
+
+const SUPPORTED_ACCOUNT_CHANNELS = new Set([
+  'MERCADO_LIVRE_ACCOUNT_1',
+  'MERCADO_LIVRE_ACCOUNT_2',
+  'MERCADO_LIVRE_FULFILLMENT_C1',
+  'MERCADO_LIVRE_FULFILLMENT_C2',
+]);
+const FULL_CHANNELS = new Set([
+  'MERCADO_LIVRE_FULFILLMENT_C1',
+  'MERCADO_LIVRE_FULFILLMENT_C2',
+]);
+
+export function saoPauloBusinessDate(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 export function calendarDateRange(from: string, to: string): string[] {
@@ -242,7 +394,10 @@ export function calendarDateRange(from: string, to: string): string[] {
 }
 
 function reportDaysFor(
-  params: DailySellerMetricsBackfillParams,
+  params: Pick<
+    DailySellerMetricsBackfillParams,
+    'from' | 'to' | 'geFinanceDays'
+  >,
 ): Array<{ businessDate: string; sha256: string | null }> {
   if (!params.geFinanceDays) {
     return calendarDateRange(params.from, params.to).map((businessDate) => ({

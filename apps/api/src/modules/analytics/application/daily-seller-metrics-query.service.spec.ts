@@ -9,6 +9,7 @@ import { DatabaseService } from '../../../database/database.service.js';
 import {
   DailySellerMetricsQueryDto,
   DailySellerMetricsRangeQueryDto,
+  SellerMetricsComparisonQueryDto,
 } from '../http/seller-metrics-query.dto.js';
 import {
   DailySellerMetricsQueryService,
@@ -158,6 +159,184 @@ describe('DailySellerMetricsQueryService', () => {
     );
   });
 
+  it('compares two accounts with aligned dates, null missing days and exact summaries', async () => {
+    const database = new QueryDatabase([
+      comparisonSnapshot('2026-09-16', ACCOUNT_ID, {
+        grossSales: '100',
+        fullGrossSales: '40',
+        salesCount: '2',
+        fullSalesCount: '1',
+        marginRate: '10',
+        marginAmount: '10',
+        marginBaseAmount: '100',
+      }),
+      comparisonSnapshot('2026-09-17', ACCOUNT_ID, {
+        grossSales: '300',
+        fullGrossSales: '60',
+        salesCount: '3',
+        fullSalesCount: '2',
+        marginRate: '50',
+        marginAmount: '150',
+        marginBaseAmount: '300',
+      }),
+      comparisonSnapshot('2026-09-16', OTHER_ACCOUNT_ID, {
+        grossSales: '200',
+        fullGrossSales: '100',
+        salesCount: '4',
+        fullSalesCount: '2',
+        marginRate: '10',
+        marginAmount: '20',
+        marginBaseAmount: '200',
+      }),
+      comparisonSnapshot('2026-09-18', OTHER_ACCOUNT_ID, {
+        grossSales: '100',
+        fullGrossSales: '25',
+        salesCount: '1',
+        fullSalesCount: '1',
+        marginRate: '50',
+        marginAmount: '50',
+        marginBaseAmount: '100',
+      }),
+    ]);
+
+    const result = await service(database).findComparison(
+      ACCOUNT_ID,
+      OTHER_ACCOUNT_ID,
+      '2026-09-16',
+      '2026-09-18',
+    );
+
+    assert.deepEqual(result.accounts.map(({ marketplaceAccountId }) => marketplaceAccountId), [
+      ACCOUNT_ID,
+      OTHER_ACCOUNT_ID,
+    ]);
+    assert.deepEqual(result.accounts[0]!.summary, {
+      grossSales: '400',
+      fullGrossSales: '100',
+      salesCount: '5',
+      fullSalesCount: '3',
+      averageTicket: '80',
+      marginRate: '40',
+      marginRateStatus: 'AVAILABLE',
+    });
+    assert.notEqual(result.accounts[0]!.summary.marginRate, '30');
+    assert.deepEqual(result.accounts[1]!.summary, {
+      grossSales: '300',
+      fullGrossSales: '125',
+      salesCount: '5',
+      fullSalesCount: '3',
+      averageTicket: '60',
+      marginRate: '23.3333333333',
+      marginRateStatus: 'AVAILABLE',
+    });
+    assert.deepEqual(
+      result.accounts.map(({ days }) => days.map(({ date }) => date)),
+      [
+        ['2026-09-16', '2026-09-17', '2026-09-18'],
+        ['2026-09-16', '2026-09-17', '2026-09-18'],
+      ],
+    );
+    assert.deepEqual(result.accounts[0]!.days[2], {
+      date: '2026-09-18',
+      grossSales: null,
+      marginRate: null,
+      fullGrossSales: null,
+      averageTicket: null,
+      salesCount: null,
+      fullSalesCount: null,
+      snapshotAvailable: false,
+      status: 'MISSING_SNAPSHOT',
+    });
+    assert.deepEqual(
+      result.accounts.map(({ availableDays, missingDays, expectedDays }) => ({
+        availableDays,
+        missingDays,
+        expectedDays,
+      })),
+      [
+        { availableDays: 2, missingDays: 1, expectedDays: 3 },
+        { availableDays: 2, missingDays: 1, expectedDays: 3 },
+      ],
+    );
+    assert.deepEqual(database.comparisonQueries[0]?.accountIds, [
+      ACCOUNT_ID,
+      OTHER_ACCOUNT_ID,
+    ]);
+  });
+
+  it('never approximates a period margin from legacy daily rates', async () => {
+    const result = await service(
+      new QueryDatabase([snapshot('2026-09-16', ACCOUNT_ID)]),
+    ).findComparison(
+      ACCOUNT_ID,
+      OTHER_ACCOUNT_ID,
+      '2026-09-16',
+      '2026-09-16',
+    );
+
+    assert.equal(result.accounts[0]!.summary.marginRate, null);
+    assert.equal(
+      result.accounts[0]!.summary.marginRateStatus,
+      'UNAVAILABLE_COMPONENTS',
+    );
+  });
+
+  it('rejects the same account, invalid periods and invalid comparison UUIDs', async () => {
+    const queryService = service(new QueryDatabase([]));
+    await assert.rejects(
+      queryService.findComparison(
+        ACCOUNT_ID,
+        ACCOUNT_ID,
+        '2026-09-16',
+        '2026-09-17',
+      ),
+      BadRequestException,
+    );
+    await assert.rejects(
+      queryService.findComparison(
+        ACCOUNT_ID,
+        OTHER_ACCOUNT_ID,
+        '2026-09-18',
+        '2026-09-17',
+      ),
+      BadRequestException,
+    );
+
+    const dto = Object.assign(new SellerMetricsComparisonQueryDto(), {
+      accountAId: 'invalid',
+      accountBId: 'also-invalid',
+      from: '2026-09-01',
+      to: '2026-09-32',
+    });
+    assert.deepEqual(
+      (await validate(dto)).map(({ property }) => property).sort(),
+      ['accountAId', 'accountBId', 'to'],
+    );
+  });
+
+  it('returns only snapshots scoped to the requested comparison accounts', async () => {
+    const outsideId = '00000000-0000-4000-8000-000000000004';
+    const own = comparisonSnapshot('2026-09-16', ACCOUNT_ID, {
+      grossSales: '10', fullGrossSales: '1', salesCount: '1', fullSalesCount: '1',
+      marginRate: '10', marginAmount: '1', marginBaseAmount: '10',
+    });
+    const outside = comparisonSnapshot('2026-09-16', outsideId, {
+      grossSales: '999', fullGrossSales: '999', salesCount: '999', fullSalesCount: '999',
+      marginRate: '99', marginAmount: '999', marginBaseAmount: '1',
+    });
+    const database = new QueryDatabase([own, outside]);
+
+    const result = await service(database).findComparison(
+      ACCOUNT_ID,
+      OTHER_ACCOUNT_ID,
+      '2026-09-16',
+      '2026-09-16',
+    );
+
+    assert.equal(result.accounts[0]!.summary.grossSales, '10');
+    assert.equal(JSON.stringify(result).includes('999'), false);
+  });
+
   it('allowlists evidence and does not expose PII or free text', async () => {
     const stored = snapshot('2026-09-16', ACCOUNT_ID);
     stored.metrics[2]!.validationEvidence = [
@@ -230,6 +409,64 @@ type MetricName =
   | 'AVERAGE_TICKET'
   | 'CONVERSION_RATE';
 
+interface ComparisonValues {
+  grossSales: string;
+  fullGrossSales: string;
+  salesCount: string;
+  fullSalesCount: string;
+  marginRate: string;
+  marginAmount: string;
+  marginBaseAmount: string;
+}
+
+function comparisonSnapshot(
+  date: string,
+  marketplaceAccountId: string,
+  values: ComparisonValues,
+): Snapshot {
+  const result = snapshot(date, marketplaceAccountId);
+  setMetric(result, 'GROSS_SALES', values.grossSales);
+  setMetric(result, 'FULL_GROSS_SALES', values.fullGrossSales);
+  setMetric(result, 'SALES_COUNT', values.salesCount);
+  setMetric(result, 'FULL_SALES_COUNT', values.fullSalesCount);
+  setMetric(result, 'MARGIN_RATE', values.marginRate);
+  setMetric(
+    result,
+    'AVERAGE_TICKET',
+    new Prisma.Decimal(values.grossSales)
+      .dividedBy(values.salesCount)
+      .toString(),
+  );
+  const margin = result.metrics.find(({ name }) => name === 'MARGIN_RATE')!;
+  margin.source = 'GEFINANCE';
+  margin.validationEvidence = [
+    {
+      metric: 'marginRate',
+      source: 'GEFINANCE',
+      value: values.marginAmount,
+      component: 'MARGIN_AMOUNT',
+      status: 'AVAILABLE',
+    },
+    {
+      metric: 'marginRate',
+      source: 'GEFINANCE',
+      value: values.marginBaseAmount,
+      component: 'MARGIN_BASE_AMOUNT',
+      status: 'AVAILABLE',
+    },
+  ];
+  return result;
+}
+
+function setMetric(
+  value: Snapshot,
+  name: MetricName,
+  amount: string,
+): void {
+  value.metrics.find((metric) => metric.name === name)!.value =
+    new Prisma.Decimal(amount);
+}
+
 function snapshot(date: string, marketplaceAccountId: string): Snapshot {
   const values: Array<[MetricName, string | null]> = [
     ['SALES_COUNT', '2'],
@@ -263,6 +500,7 @@ class QueryDatabase {
   readonly accounts: Set<string>;
   readonly dailyQueries: Array<{ marketplaceAccountId: string; businessDate: Date }> = [];
   readonly rangeQueries: Array<{ marketplaceAccountId: string; from: Date; to: Date }> = [];
+  readonly comparisonQueries: Array<{ accountIds: string[]; from: Date; to: Date }> = [];
 
   constructor(
     private readonly snapshots: Snapshot[],
@@ -272,12 +510,16 @@ class QueryDatabase {
   }
 
   marketplaceAccount = {
-    findMany: async () =>
-      [...this.accounts].map((id, index) => ({
-        id,
-        name: index === 0 ? 'Conta 2' : 'Conta 3',
-        marketplace: index === 0 ? 'MERCADO_LIVRE' : 'SHOPEE',
-      })),
+    findMany: async (query?: AccountListQuery) => {
+      const requested = query?.where?.id?.in;
+      return [...this.accounts]
+        .filter((id) => requested === undefined || requested.includes(id))
+        .map((id, index) => ({
+          id,
+          name: id === ACCOUNT_ID ? 'Conta 2' : 'Conta 3',
+          marketplace: index === 0 ? 'MERCADO_LIVRE' : 'SHOPEE',
+        }));
+    },
     findUnique: async ({ where }: { where: { id: string } }) =>
       this.accounts.has(where.id) ? { id: where.id } : null,
   };
@@ -294,22 +536,37 @@ class QueryDatabase {
         ) ?? null
       );
     },
-    findMany: async ({ where }: RangeQuery) => {
-      this.rangeQueries.push({
-        marketplaceAccountId: where.marketplaceAccountId,
-        from: where.businessDate.gte,
-        to: where.businessDate.lte,
-      });
+    findMany: async ({ where }: RangeQuery | ComparisonQuery) => {
+      const accountFilter = where.marketplaceAccountId;
+      const accountIds =
+        typeof accountFilter === 'string' ? [accountFilter] : accountFilter.in;
+      if (typeof accountFilter === 'string') {
+        this.rangeQueries.push({
+          marketplaceAccountId: accountFilter,
+          from: where.businessDate.gte,
+          to: where.businessDate.lte,
+        });
+      } else {
+        this.comparisonQueries.push({
+          accountIds: [...accountIds],
+          from: where.businessDate.gte,
+          to: where.businessDate.lte,
+        });
+      }
       return this.snapshots
         .filter(
           (item) =>
-            item.marketplaceAccountId === where.marketplaceAccountId &&
+            accountIds.includes(item.marketplaceAccountId) &&
             item.businessDate >= where.businessDate.gte &&
             item.businessDate <= where.businessDate.lte,
         )
         .sort((left, right) => left.businessDate.getTime() - right.businessDate.getTime());
     },
   };
+}
+
+interface AccountListQuery {
+  where?: { id?: { in: string[] } };
 }
 
 interface DailyQuery {
@@ -324,6 +581,13 @@ interface DailyQuery {
 interface RangeQuery {
   where: {
     marketplaceAccountId: string;
+    businessDate: { gte: Date; lte: Date };
+  };
+}
+
+interface ComparisonQuery {
+  where: {
+    marketplaceAccountId: { in: string[] };
     businessDate: { gte: Date; lte: Date };
   };
 }

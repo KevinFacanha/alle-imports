@@ -47,6 +47,8 @@ export interface DailySellerMetricsExecutionMetadata {
   marketplaceAccountId: string;
   geFinanceReportSha256?: string | null;
   geFinanceDailySha256?: string | null;
+  geFinanceMarginAmount?: string | Prisma.Decimal | null;
+  geFinanceMarginBaseAmount?: string | Prisma.Decimal | null;
   calculatedAt?: Date;
 }
 
@@ -85,6 +87,30 @@ export interface GeFinanceDailyHashBackfillSummary {
   alreadyHashed: number;
   snapshotsMissing: number;
 }
+
+export interface GeFinanceLocalMetricRefreshInput {
+  marketplaceAccountId: string;
+  businessDate: string;
+  geFinanceReportSha256: string;
+  geFinanceDailySha256: string;
+  marginRate: Prisma.Decimal | null;
+  marginAmount: Prisma.Decimal;
+  marginBaseAmount: Prisma.Decimal;
+  fullGrossSalesEvidenceAmount: Prisma.Decimal;
+  calculatedAt?: Date;
+}
+
+export interface GeFinanceMarginComponentsBackfillInput {
+  marketplaceAccountId: string;
+  businessDate: string;
+  marginAmount: Prisma.Decimal;
+  marginBaseAmount: Prisma.Decimal;
+}
+
+export type GeFinanceMarginComponentsBackfillAction =
+  | 'ENRICHED'
+  | 'UNCHANGED'
+  | 'MISSING_SNAPSHOT';
 
 @Injectable()
 export class DailySellerMetricsPersistenceService {
@@ -199,6 +225,181 @@ export class DailySellerMetricsPersistenceService {
     };
   }
 
+  async refreshGeFinanceMetrics(
+    params: GeFinanceLocalMetricRefreshInput,
+  ): Promise<DailySellerMetricsPersistenceSummary> {
+    const businessDate = parseBusinessDate(params.businessDate);
+    const calculatedAt = params.calculatedAt ?? new Date();
+    validateHash(params.geFinanceReportSha256, 'report');
+    validateHash(params.geFinanceDailySha256, 'daily');
+    if (!params.marketplaceAccountId || Number.isNaN(calculatedAt.getTime())) {
+      throw new DailySellerMetricsPersistenceError(
+        'Marketplace account id and calculatedAt are required.',
+      );
+    }
+
+    return this.database.$transaction(async (transaction) => {
+      const snapshot = await transaction.dailySellerMetrics.findUnique({
+        where: {
+          marketplaceAccountId_businessDate: {
+            marketplaceAccountId: params.marketplaceAccountId,
+            businessDate,
+          },
+        },
+        select: {
+          id: true,
+          timezone: true,
+          metrics: {
+            where: { name: { in: ['MARGIN_RATE', 'FULL_GROSS_SALES'] } },
+            select: {
+              name: true,
+              value: true,
+              status: true,
+              validationEvidence: true,
+            },
+          },
+        },
+      });
+      if (!snapshot) {
+        throw new DailySellerMetricsPersistenceError(
+          'Local GeFinance refresh requires an existing daily snapshot.',
+        );
+      }
+      const marginRow = snapshot.metrics.find(
+        ({ name }) => name === 'MARGIN_RATE',
+      );
+      const fullGrossRow = snapshot.metrics.find(
+        ({ name }) => name === 'FULL_GROSS_SALES',
+      );
+      if (!marginRow || !fullGrossRow) {
+        throw new DailySellerMetricsPersistenceError(
+          'Local GeFinance refresh requires marginRate and fullGrossSales metrics.',
+        );
+      }
+
+      const marginMetric = geFinanceMarginMetric(
+        params.marginRate,
+        params.marginAmount,
+        params.marginBaseAmount,
+      );
+      await transaction.dailySellerMetric.update({
+        where: {
+          dailySellerMetricsId_name: {
+            dailySellerMetricsId: snapshot.id,
+            name: 'MARGIN_RATE',
+          },
+        },
+        data: metricData(marginMetric),
+      });
+
+      const currentEvidence = Array.isArray(fullGrossRow.validationEvidence)
+        ? fullGrossRow.validationEvidence
+        : [];
+      const refreshedFullEvidence = replaceGeFinanceEvidence(
+        currentEvidence,
+        fullGrossSalesEvidence(
+          params.fullGrossSalesEvidenceAmount,
+          fullGrossRow.value,
+          fullGrossRow.status,
+        ),
+      );
+      await transaction.dailySellerMetric.update({
+        where: {
+          dailySellerMetricsId_name: {
+            dailySellerMetricsId: snapshot.id,
+            name: 'FULL_GROSS_SALES',
+          },
+        },
+        data: { validationEvidence: refreshedFullEvidence },
+      });
+      await transaction.dailySellerMetrics.update({
+        where: { id: snapshot.id },
+        data: {
+          geFinanceReportSha256: params.geFinanceReportSha256,
+          geFinanceDailySha256: params.geFinanceDailySha256,
+          calculatedAt,
+        },
+      });
+
+      return {
+        marketplaceAccountId: params.marketplaceAccountId,
+        businessDate: params.businessDate,
+        timezone: snapshot.timezone,
+        action: 'UPDATED' as const,
+        calculatedAt: calculatedAt.toISOString(),
+        geFinanceReportSha256: params.geFinanceReportSha256,
+        geFinanceDailySha256: params.geFinanceDailySha256,
+        metricCount: 2,
+        unavailableMetrics: params.marginRate === null ? ['marginRate'] : [],
+      };
+    }, PERSISTENCE_TRANSACTION_OPTIONS);
+  }
+
+  async backfillGeFinanceMarginComponents(
+    params: GeFinanceMarginComponentsBackfillInput,
+  ): Promise<GeFinanceMarginComponentsBackfillAction> {
+    const businessDate = parseBusinessDate(params.businessDate);
+    if (!params.marketplaceAccountId) {
+      throw new DailySellerMetricsPersistenceError(
+        'Marketplace account id is required.',
+      );
+    }
+
+    return this.database.$transaction(async (transaction) => {
+      const snapshot = await transaction.dailySellerMetrics.findUnique({
+        where: {
+          marketplaceAccountId_businessDate: {
+            marketplaceAccountId: params.marketplaceAccountId,
+            businessDate,
+          },
+        },
+        select: {
+          id: true,
+          metrics: {
+            where: { name: 'MARGIN_RATE' },
+            select: { name: true, validationEvidence: true },
+          },
+        },
+      });
+      if (!snapshot) return 'MISSING_SNAPSHOT' as const;
+
+      const marginRow = snapshot.metrics[0];
+      if (!marginRow) {
+        throw new DailySellerMetricsPersistenceError(
+          'Margin component backfill requires an existing marginRate metric.',
+        );
+      }
+      const currentEvidence = Array.isArray(marginRow.validationEvidence)
+        ? marginRow.validationEvidence
+        : [];
+      if (
+        hasStoredMarginComponents(
+          currentEvidence,
+          params.marginAmount,
+          params.marginBaseAmount,
+        )
+      ) {
+        return 'UNCHANGED' as const;
+      }
+      const enrichedEvidence = withStoredMarginComponents(
+        currentEvidence,
+        params.marginAmount,
+        params.marginBaseAmount,
+      );
+
+      await transaction.dailySellerMetric.update({
+        where: {
+          dailySellerMetricsId_name: {
+            dailySellerMetricsId: snapshot.id,
+            name: 'MARGIN_RATE',
+          },
+        },
+        data: { validationEvidence: enrichedEvidence },
+      });
+      return 'ENRICHED' as const;
+    }, PERSISTENCE_TRANSACTION_OPTIONS);
+  }
+
   async persist(
     resolved: ResolvedSellerBiMetrics,
     metadata: DailySellerMetricsExecutionMetadata,
@@ -209,7 +410,11 @@ export class DailySellerMetricsPersistenceService {
 
     const metrics = PERSISTED_SELLER_METRIC_NAMES.map((name) => ({
       name,
-      data: metricData(resolved.metrics[name]),
+      data: metricData(
+        name === 'marginRate'
+          ? withMarginComponents(resolved.metrics[name], metadata)
+          : resolved.metrics[name],
+      ),
     }));
     const identity = {
       marketplaceAccountId_businessDate: {
@@ -314,6 +519,7 @@ function sanitizeEvidence(
     metric: evidence.metric,
     source: evidence.source,
     value: safeEvidenceValue(evidence.value),
+    ...(evidence.component ? { component: evidence.component } : {}),
     status: evidence.status,
     comparison: evidence.comparison,
     semantic: redactSensitiveText(evidence.semantic),
@@ -340,6 +546,228 @@ function redactSensitiveText(value: string): string {
     .replace(/\b\d{3}[.\s-]?\d{3}[.\s-]?\d{3}[-\s]?\d{2}\b/g, '[REDACTED]')
     .replace(/\b\d{2}[.\s-]?\d{3}[.\s-]?\d{3}[\/]?\d{4}[-\s]?\d{2}\b/g, '[REDACTED]')
     .replace(/\b(?:\+?55\s*)?(?:\(?\d{2}\)?\s*)?9?\d{4}[-\s]?\d{4}\b/g, '[REDACTED]');
+}
+
+function geFinanceMarginMetric(
+  rate: Prisma.Decimal | null,
+  amount: Prisma.Decimal,
+  baseAmount: Prisma.Decimal,
+): ResolvedSellerBiMetric {
+  const value = rate?.mul(100).toDecimalPlaces(10).toString() ?? null;
+  const available = value !== null;
+  return {
+    value,
+    source: 'GEFINANCE',
+    status: available ? 'AVAILABLE' : 'UNAVAILABLE',
+    confidence: available ? 'HIGH' : 'LOW',
+    validationEvidence: [
+      {
+        metric: 'marginRate',
+        source: 'GEFINANCE',
+        value,
+        status: available ? 'AVAILABLE' : 'UNAVAILABLE',
+        comparison: available ? 'PRIMARY' : 'UNAVAILABLE',
+        semantic: 'SUM(Margem) / SUM(Total prod. vendidos)',
+        absoluteDifference: null,
+        percentageDifference: null,
+        notes: available
+          ? 'Taxa agregada por somas; percentuais de linha não são promediados. Valor expresso em percentual.'
+          : 'Taxa agregada indisponível porque o denominador é zero.',
+      },
+      marginComponentEvidence('MARGIN_AMOUNT', amount),
+      marginComponentEvidence('MARGIN_BASE_AMOUNT', baseAmount),
+    ],
+    notes: [
+      'Calculada por razão de somas; percentuais de linha não são promediados.',
+    ],
+  };
+}
+
+function withMarginComponents(
+  metric: ResolvedSellerBiMetric,
+  metadata: DailySellerMetricsExecutionMetadata,
+): ResolvedSellerBiMetric {
+  const amount = optionalDecimal(metadata.geFinanceMarginAmount);
+  const baseAmount = optionalDecimal(metadata.geFinanceMarginBaseAmount);
+  if (amount === null || baseAmount === null) return metric;
+
+  return {
+    ...metric,
+    validationEvidence: [
+      ...metric.validationEvidence.filter(({ component }) => !component),
+      marginComponentEvidence('MARGIN_AMOUNT', amount),
+      marginComponentEvidence('MARGIN_BASE_AMOUNT', baseAmount),
+    ],
+  };
+}
+
+function marginComponentEvidence(
+  component: 'MARGIN_AMOUNT' | 'MARGIN_BASE_AMOUNT',
+  value: Prisma.Decimal,
+): SellerBiMetricValidationEvidence {
+  return {
+    metric: 'marginRate',
+    source: 'GEFINANCE',
+    value: value.toString(),
+    component,
+    status: 'AVAILABLE',
+    comparison: 'PRIMARY',
+    semantic:
+      component === 'MARGIN_AMOUNT'
+        ? 'SUM(Margem)'
+        : 'SUM(Total prod. vendidos)',
+    absoluteDifference: null,
+    percentageDifference: null,
+    notes: 'Componente exato persistido para agregação temporal da margem.',
+  };
+}
+
+function hasStoredMarginComponents(
+  current: Prisma.JsonArray,
+  marginAmount: Prisma.Decimal,
+  marginBaseAmount: Prisma.Decimal,
+): boolean {
+  const expected = new Map([
+    ['MARGIN_AMOUNT', marginAmount],
+    ['MARGIN_BASE_AMOUNT', marginBaseAmount],
+  ]);
+  const found = new Set<string>();
+  for (const entry of current) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    if (entry.component !== 'MARGIN_AMOUNT' && entry.component !== 'MARGIN_BASE_AMOUNT') {
+      continue;
+    }
+    if (
+      found.has(entry.component) ||
+      entry.source !== 'GEFINANCE' ||
+      entry.status !== 'AVAILABLE' ||
+      (typeof entry.value !== 'string' && typeof entry.value !== 'number')
+    ) {
+      return false;
+    }
+    try {
+      if (!new Prisma.Decimal(entry.value).equals(expected.get(entry.component)!)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    found.add(entry.component);
+  }
+  return found.size === expected.size;
+}
+
+function withStoredMarginComponents(
+  current: Prisma.JsonArray,
+  marginAmount: Prisma.Decimal,
+  marginBaseAmount: Prisma.Decimal,
+): Prisma.InputJsonArray {
+  const withoutMarginComponents = current.filter((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      return true;
+    }
+    return (
+      entry.component !== 'MARGIN_AMOUNT' &&
+      entry.component !== 'MARGIN_BASE_AMOUNT'
+    );
+  });
+  return [
+    ...(withoutMarginComponents as Prisma.InputJsonValue[]),
+    sanitizeEvidence(marginComponentEvidence('MARGIN_AMOUNT', marginAmount)),
+    sanitizeEvidence(
+      marginComponentEvidence('MARGIN_BASE_AMOUNT', marginBaseAmount),
+    ),
+  ] as Prisma.InputJsonArray;
+}
+
+function optionalDecimal(
+  value: string | Prisma.Decimal | null | undefined,
+): Prisma.Decimal | null {
+  if (value === undefined || value === null) return null;
+  try {
+    return new Prisma.Decimal(value);
+  } catch {
+    throw new DailySellerMetricsPersistenceError(
+      'GeFinance margin component contains a non-numeric value.',
+    );
+  }
+}
+
+function fullGrossSalesEvidence(
+  amount: Prisma.Decimal,
+  primaryValue: Prisma.Decimal | null,
+  primaryStatus: string,
+): SellerBiMetricValidationEvidence {
+  const value = amount.toFixed(2);
+  const primaryAvailable =
+    primaryValue !== null &&
+    primaryStatus !== 'UNAVAILABLE' &&
+    primaryStatus !== 'INCOMPATIBLE_SEMANTICS';
+  const difference =
+    primaryAvailable && primaryValue !== null
+      ? amount.minus(primaryValue).abs()
+      : null;
+  const percentage =
+    difference === null || primaryValue === null || primaryValue.isZero()
+      ? null
+      : difference.dividedBy(primaryValue.abs()).mul(100);
+  return {
+    metric: 'fullGrossSales',
+    source: 'GEFINANCE',
+    value,
+    status: 'AVAILABLE',
+    comparison: !primaryAvailable
+      ? 'UNAVAILABLE'
+      : difference!.isZero()
+        ? 'MATCH'
+        : 'DIVERGENT',
+    semantic:
+      'SUM(GeFinance Total prod. vendidos), channel Mercado Livre Fulfillment C2',
+    absoluteDifference:
+      difference === null ? null : decimalDifference(difference),
+    percentageDifference:
+      percentage === null ? null : percentage.toFixed(4),
+    notes: 'Componente financeiro Full compatível.',
+  };
+}
+
+function replaceGeFinanceEvidence(
+  current: Prisma.JsonArray,
+  replacement: SellerBiMetricValidationEvidence,
+): Prisma.InputJsonArray {
+  const sanitized = sanitizeEvidence(replacement);
+  const result: Prisma.InputJsonValue[] = [];
+  let replaced = false;
+  for (const item of current) {
+    if (
+      !replaced &&
+      typeof item === 'object' &&
+      item !== null &&
+      !Array.isArray(item) &&
+      item.source === 'GEFINANCE'
+    ) {
+      result.push(sanitized);
+      replaced = true;
+    } else {
+      result.push(item as Prisma.InputJsonValue);
+    }
+  }
+  if (!replaced) result.push(sanitized);
+  return result as Prisma.InputJsonArray;
+}
+
+function decimalDifference(value: Prisma.Decimal): string {
+  return value.isInteger() ? value.toFixed(0) : value.toString();
+}
+
+function validateHash(value: string, kind: 'report' | 'daily'): void {
+  if (!/^[a-f0-9]{64}$/i.test(value)) {
+    throw new DailySellerMetricsPersistenceError(
+      `GeFinance ${kind} SHA-256 must contain 64 hexadecimal characters.`,
+    );
+  }
 }
 
 function parseBusinessDate(value: string): Date {

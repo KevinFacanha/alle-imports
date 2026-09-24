@@ -9,6 +9,7 @@ import {
   GeFinanceReportProvider,
 } from '../../integrations/gefinance/gefinance-report.provider.js';
 import {
+  DailySellerMetricsBackfillPlan,
   DailySellerMetricsBackfillProgress,
   DailySellerMetricsBackfillService,
   DailySellerMetricsBackfillSummary,
@@ -33,6 +34,16 @@ export interface GeFinanceImportResult {
   marketplaceAccount: { id: string; name: string };
   olistAccount: { id: string; name: string; integrationKey: string };
   backfill: DailySellerMetricsBackfillSummary;
+}
+
+export interface GeFinanceImportPreflight {
+  file: string;
+  sha256: string;
+  report: GeFinanceReportInspection;
+  marketplaceAccount: { id: string; name: string };
+  olistAccount: { id: string; name: string; integrationKey: string };
+  plan: DailySellerMetricsBackfillPlan;
+  provider: FinancialEvidenceProvider;
 }
 
 export interface GeFinanceDailyHashBackfillResult {
@@ -81,12 +92,13 @@ export class GeFinanceImportService {
     };
   }
 
-  async execute(params: {
+  async preflight(params: {
     file: string;
     sha256: string;
     expectedAccountOrdinal?: number;
-    onProgress?: (progress: DailySellerMetricsBackfillProgress) => void;
-  }): Promise<GeFinanceImportResult> {
+    includeToday?: boolean;
+    currentDate?: string;
+  }): Promise<GeFinanceImportPreflight> {
     const provider = this.geFinanceProviderFactory(
       params.file,
     ) as Pick<GeFinanceReportProvider, 'getFinancialEvidence' | 'inspectReport'>;
@@ -101,19 +113,60 @@ export class GeFinanceImportService {
       );
     }
     const accounts = await this.resolveAccounts(accountOrdinal);
-    const backfill = await this.backfill.execute({
+    const plan = await this.backfill.preflight({
       marketplaceAccountId: accounts.marketplaceAccount.id,
-      olistAccountId: accounts.olistAccount.id,
-      geFinanceReportPath: params.file,
-      geFinanceReportSha256: params.sha256,
-      geFinanceDays: report.days,
-      geFinanceProvider: provider as FinancialEvidenceProvider,
       from: report.from,
       to: report.to,
-      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      geFinanceDays: report.days,
+      includeToday: params.includeToday,
+      currentDate: params.currentDate,
     });
 
-    return { report, ...accounts, backfill };
+    return {
+      file: params.file,
+      sha256: params.sha256,
+      report,
+      ...accounts,
+      plan,
+      provider: provider as FinancialEvidenceProvider,
+    };
+  }
+
+  async execute(params: {
+    file: string;
+    sha256: string;
+    expectedAccountOrdinal?: number;
+    includeToday?: boolean;
+    currentDate?: string;
+    onProgress?: (progress: DailySellerMetricsBackfillProgress) => void;
+  }): Promise<GeFinanceImportResult> {
+    const preflight = await this.preflight(params);
+    return this.executePrepared(preflight, params.onProgress);
+  }
+
+  async executePrepared(
+    preflight: GeFinanceImportPreflight,
+    onProgress?: (progress: DailySellerMetricsBackfillProgress) => void,
+  ): Promise<GeFinanceImportResult> {
+    const backfill = await this.backfill.execute({
+      marketplaceAccountId: preflight.marketplaceAccount.id,
+      olistAccountId: preflight.olistAccount.id,
+      geFinanceReportPath: preflight.file,
+      geFinanceReportSha256: preflight.sha256,
+      geFinanceDays: preflight.report.days,
+      geFinanceProvider: preflight.provider,
+      from: preflight.report.from,
+      to: preflight.report.to,
+      plan: preflight.plan,
+      ...(onProgress ? { onProgress } : {}),
+    });
+
+    return {
+      report: preflight.report,
+      marketplaceAccount: preflight.marketplaceAccount,
+      olistAccount: preflight.olistAccount,
+      backfill,
+    };
   }
 
   private async resolveAccounts(accountOrdinal: number): Promise<{
