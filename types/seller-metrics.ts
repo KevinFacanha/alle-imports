@@ -48,3 +48,49 @@ export interface DailySellerMetricsRange {
   to: string
   days: DailySellerMetrics[]
 }
+
+export type ComparisonDayStatus = "AVAILABLE" | "PARTIAL" | "MISSING_SNAPSHOT"
+
+export type ComparisonMarginRateStatus =
+  | "AVAILABLE"
+  | "UNAVAILABLE_COMPONENTS"
+  | "UNAVAILABLE_ZERO_BASE"
+  | "NO_SNAPSHOTS"
+
+export type ComparisonMetricName =
+  | "grossSales"
+  | "marginRate"
+  | "fullGrossSales"
+  | "averageTicket"
+  | "salesCount"
+  | "fullSalesCount"
+
+export interface SellerMetricsComparisonDay {
+  date: string
+  grossSales: string | null
+  marginRate: string | null
+  fullGrossSales: string | null
+  averageTicket: string | null
+  salesCount: string | null
+  fullSalesCount: string | null
+  snapshotAvailable: boolean
+  status: ComparisonDayStatus
+}
+
+export interface SellerMetricsComparisonAccount {
+  marketplaceAccountId: string
+  name: string
+  summary: Record<ComparisonMetricName, string | null> & {
+    marginRateStatus: ComparisonMarginRateStatus
+  }
+  days: SellerMetricsComparisonDay[]
+  availableDays: number
+  missingDays: number
+  expectedDays: number
+}
+
+export interface SellerMetricsComparison {
+  from: string
+  to: string
+  accounts: SellerMetricsComparisonAccount[]
+}

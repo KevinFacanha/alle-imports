@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import {
   BadgeDollarSign,
   Boxes,
@@ -19,6 +20,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useSellerMetrics } from "@/features/dashboard/hooks/use-seller-metrics"
 import type { SellerMetricName } from "@/types/seller-metrics"
 
+import { AccountComparison } from "./account-comparison"
+import { CommercialHeader, type CommercialView } from "./commercial-header"
 import { SellerMetricCard } from "./seller-metric-card"
 import { SellerMetricsFilters } from "./seller-metrics-filters"
 
@@ -39,33 +42,40 @@ const fullMetrics = [
 ] as const
 
 export function CommercialIntelligence() {
+  const [view, setView] = useState<CommercialView>("daily")
+
+  if (view === "comparison") {
+    return <AccountComparison onViewChange={setView} />
+  }
+
+  return <DailyCommercialIntelligence onViewChange={setView} />
+}
+
+function DailyCommercialIntelligence({
+  onViewChange,
+}: {
+  onViewChange: (view: CommercialView) => void
+}) {
   const sellerMetrics = useSellerMetrics()
   const selectedAccount = sellerMetrics.accounts.find(
     (account) => account.id === sellerMetrics.selectedAccountId,
   )
 
+  const filters = (
+    <SellerMetricsFilters
+      accounts={sellerMetrics.accounts}
+      selectedAccountId={sellerMetrics.selectedAccountId}
+      selectedDate={sellerMetrics.selectedDate}
+      availableDates={sellerMetrics.availableDates}
+      disabled={sellerMetrics.state === "loading" && sellerMetrics.accounts.length === 0}
+      onAccountChange={sellerMetrics.setAccount}
+      onDateChange={sellerMetrics.setDate}
+    />
+  )
+
   return (
     <section className="space-y-6" aria-labelledby="commercial-intelligence-title">
-      <div className="flex flex-col gap-5 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-[#f8f7ff] p-5 sm:p-6 xl:flex-row xl:items-end xl:justify-between">
-        <div className="max-w-xl">
-          <p className="mb-2 text-xs font-bold uppercase tracking-[.15em] text-[#6254d9]">GABI · Comercial</p>
-          <h2 id="commercial-intelligence-title" className="text-2xl font-bold tracking-[-.04em] sm:text-3xl">
-            Inteligência Comercial
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            Indicadores processados e conciliados por conta e data de negócio.
-          </p>
-        </div>
-        <SellerMetricsFilters
-          accounts={sellerMetrics.accounts}
-          selectedAccountId={sellerMetrics.selectedAccountId}
-          selectedDate={sellerMetrics.selectedDate}
-          availableDates={sellerMetrics.availableDates}
-          disabled={sellerMetrics.state === "loading" && sellerMetrics.accounts.length === 0}
-          onAccountChange={sellerMetrics.setAccount}
-          onDateChange={sellerMetrics.setDate}
-        />
-      </div>
+      <CommercialHeader view="daily" controls={filters} onViewChange={onViewChange} />
 
       {sellerMetrics.state === "loading" && <MetricsLoading />}
 

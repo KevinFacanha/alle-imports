@@ -2,6 +2,7 @@ import type {
   DailySellerMetrics,
   DailySellerMetricsRange,
   MarketplaceAccountSummary,
+  SellerMetricsComparison,
 } from "@/types/seller-metrics"
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api/v1").replace(
@@ -54,4 +55,15 @@ export function getDailySellerMetricsRange(
 ) {
   const query = new URLSearchParams({ marketplaceAccountId, from, to })
   return request<DailySellerMetricsRange>(`/analytics/seller-metrics/daily/range?${query}`, signal)
+}
+
+export function getSellerMetricsComparison(
+  accountAId: string,
+  accountBId: string,
+  from: string,
+  to: string,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({ accountAId, accountBId, from, to })
+  return request<SellerMetricsComparison>(`/analytics/seller-metrics/comparison?${query}`, signal)
 }
