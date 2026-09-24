@@ -18,6 +18,7 @@
     "backfill:seller-metrics": "npm run build && node --env-file=.env dist/scripts/backfill-seller-metrics.js",
     "backfill:gefinance:daily-hashes": "npm run build && node --env-file=.env dist/scripts/backfill-gefinance-daily-hashes.js",
     "import:gefinance": "npm run build && node --env-file=.env dist/scripts/import-gefinance.js",
+    "update:gefinance": "npm run build && node --env-file=.env dist/scripts/update-gefinance.js",
     "inspect:olist:orders": "npm run build && node --env-file=.env dist/scripts/inspect-olist-orders.js",
     "inspect:olist:only": "npm run build && node --env-file=.env dist/scripts/inspect-olist-only.js",
     "inspect:gefinance-report": "npm run build && node dist/scripts/inspect-gefinance-report.js",

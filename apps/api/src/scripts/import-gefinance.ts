@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
 import { NestFactory } from '@nestjs/core';
@@ -12,6 +10,10 @@ import {
   GeFinanceImportService,
 } from '../modules/analytics/application/gefinance-import.service.js';
 import { GeFinanceReportError } from '../modules/integrations/gefinance/gefinance-report.provider.js';
+import {
+  GeFinanceImportFileError,
+  sha256GeFinanceFile,
+} from './gefinance-import-file.js';
 
 class GeFinanceImportCliError extends Error {
   constructor(message: string) {
@@ -24,7 +26,7 @@ async function main(): Promise<void> {
   let application;
   try {
     const file = parseFileArgument(process.argv.slice(2));
-    const sha256 = await sha256File(file);
+    const sha256 = await sha256GeFinanceFile(file);
     application = await NestFactory.createApplicationContext(AppModule, {
       logger: false,
     });
@@ -49,6 +51,7 @@ async function main(): Promise<void> {
   } catch (error: unknown) {
     const knownError =
       error instanceof GeFinanceImportCliError ||
+      error instanceof GeFinanceImportFileError ||
       error instanceof GeFinanceImportError ||
       error instanceof GeFinanceReportError ||
       error instanceof DailySellerMetricsBackfillError;
@@ -78,22 +81,6 @@ function usageError(): GeFinanceImportCliError {
   return new GeFinanceImportCliError(
     'Uso: npm run import:gefinance -- --file=<arquivo.xlsx>',
   );
-}
-
-async function sha256File(path: string): Promise<string> {
-  return new Promise((resolveHash, reject) => {
-    const hash = createHash('sha256');
-    const stream = createReadStream(path);
-    stream.on('error', () => {
-      reject(
-        new GeFinanceImportCliError(
-          'O arquivo GeFinance não pôde ser aberto para leitura.',
-        ),
-      );
-    });
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolveHash(hash.digest('hex')));
-  });
 }
 
 function printResult(file: string, result: GeFinanceImportResult): void {

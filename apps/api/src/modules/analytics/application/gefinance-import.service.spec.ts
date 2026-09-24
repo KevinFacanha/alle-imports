@@ -209,6 +209,37 @@ describe('GeFinanceImportService', () => {
     assert.equal(queried, false);
     assert.equal(backfill.params, undefined);
   });
+
+  it('rejects a C2 report in the C1 operational slot before querying accounts or running backfill', async () => {
+    let queried = false;
+    const db = database([], []);
+    db.marketplaceAccount.findMany = async () => {
+      queried = true;
+      return [];
+    };
+    const backfill = new BackfillFake();
+    const service = new GeFinanceImportService(
+      db as never,
+      backfill as never,
+      () => ({
+        inspectReport: async () => INSPECTION,
+        getFinancialEvidence: async () => ({ records: [] }),
+      }) as never,
+    );
+
+    await assert.rejects(
+      service.execute({
+        file: '/reports/gefinance-c1-latest.xlsx',
+        sha256: SHA256,
+        expectedAccountOrdinal: 1,
+      }),
+      (error: unknown) =>
+        error instanceof GeFinanceImportError &&
+        /esperado para C1 pertence à conta C2/.test(error.message),
+    );
+    assert.equal(queried, false);
+    assert.equal(backfill.params, undefined);
+  });
 });
 
 function createService(

@@ -84,6 +84,7 @@ export class GeFinanceImportService {
   async execute(params: {
     file: string;
     sha256: string;
+    expectedAccountOrdinal?: number;
     onProgress?: (progress: DailySellerMetricsBackfillProgress) => void;
   }): Promise<GeFinanceImportResult> {
     const provider = this.geFinanceProviderFactory(
@@ -91,6 +92,14 @@ export class GeFinanceImportService {
     ) as Pick<GeFinanceReportProvider, 'getFinancialEvidence' | 'inspectReport'>;
     const report = await provider.inspectReport();
     const accountOrdinal = reportAccountOrdinal(report);
+    if (
+      params.expectedAccountOrdinal !== undefined &&
+      accountOrdinal !== params.expectedAccountOrdinal
+    ) {
+      throw new GeFinanceImportError(
+        `O XLSX esperado para C${params.expectedAccountOrdinal} pertence à conta C${accountOrdinal}.`,
+      );
+    }
     const accounts = await this.resolveAccounts(accountOrdinal);
     const backfill = await this.backfill.execute({
       marketplaceAccountId: accounts.marketplaceAccount.id,
