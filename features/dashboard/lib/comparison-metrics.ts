@@ -47,6 +47,32 @@ export interface AccountComparisonFact {
   value: string
 }
 
+export type FullParticipationMetric = "revenue" | "sales"
+
+export interface FullParticipationValue {
+  fullValue: number | null
+  totalValue: number | null
+  percentage: number | null
+}
+
+export type FullParticipation = Record<FullParticipationMetric, FullParticipationValue>
+
+export interface FullParticipationTemporalComparison {
+  current: FullParticipationValue
+  previous: FullParticipationValue
+  percentagePointVariation: number | null
+}
+
+export type FullParticipationTemporal = Record<
+  FullParticipationMetric,
+  FullParticipationTemporalComparison
+>
+
+type FullParticipationSource = Pick<
+  SellerMetricsComparisonDay,
+  "grossSales" | "fullGrossSales" | "salesCount" | "fullSalesCount"
+>
+
 export const comparisonMetricDefinitions: ComparisonMetricDefinition[] = [
   { name: "grossSales", label: "Faturamento", format: "currency" },
   { name: "marginRate", label: "Margem", format: "percentage", usePercentagePoints: true },
@@ -89,6 +115,73 @@ const variation = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
 })
+
+export function calculateFullParticipation(
+  source: FullParticipationSource | null,
+): FullParticipation {
+  return {
+    revenue: calculateParticipationValue(source?.fullGrossSales ?? null, source?.grossSales ?? null),
+    sales: calculateParticipationValue(source?.fullSalesCount ?? null, source?.salesCount ?? null),
+  }
+}
+
+export function compareFullParticipation(
+  currentSource: FullParticipationSource | null,
+  previousSource: FullParticipationSource | null,
+): FullParticipationTemporal {
+  const current = calculateFullParticipation(currentSource)
+  const previous = calculateFullParticipation(previousSource)
+
+  return {
+    revenue: buildParticipationTemporalComparison(current.revenue, previous.revenue),
+    sales: buildParticipationTemporalComparison(current.sales, previous.sales),
+  }
+}
+
+export function getAccountDayParticipation(
+  account: SellerMetricsComparisonAccount | null,
+  dayValue: string,
+): FullParticipationSource | null {
+  return account?.days.find((day) => day.date === dayValue && day.snapshotAvailable) ?? null
+}
+
+export function getFullParticipationDifference(
+  accountA: FullParticipation,
+  accountB: FullParticipation,
+  metric: FullParticipationMetric,
+): number | null {
+  const percentageA = accountA[metric].percentage
+  const percentageB = accountB[metric].percentage
+  if (percentageA === null || percentageB === null) return null
+  return Math.abs(percentageA - percentageB)
+}
+
+export function formatFullParticipationPercentage(value: number | null): string {
+  return value === null ? "Indisponível" : `${decimal.format(value)}%`
+}
+
+export function formatFullParticipationDetail(
+  value: FullParticipationValue,
+  metric: FullParticipationMetric,
+): string {
+  if (value.percentage === null || value.fullValue === null || value.totalValue === null) {
+    return "Indisponível"
+  }
+
+  return metric === "revenue"
+    ? `${currency.format(value.fullValue)} de ${currency.format(value.totalValue)}`
+    : `${integer.format(value.fullValue)} de ${integer.format(value.totalValue)} vendas`
+}
+
+export function formatPercentagePointDifference(value: number | null): string {
+  return value === null ? "Indisponível" : `${decimal.format(Math.abs(value))} p.p.`
+}
+
+export function formatPercentagePointVariation(value: number | null): string {
+  if (value === null) return "Indisponível"
+  if (value === 0) return `${decimal.format(0)} p.p.`
+  return `${value > 0 ? "+" : "−"}${decimal.format(Math.abs(value))} p.p.`
+}
 
 export function getPreviousPeriod(period: ComparisonPeriod): ComparisonPeriod {
   const inclusiveDays = differenceInDays(period.from, period.to) + 1
@@ -400,6 +493,34 @@ function toFiniteNumber(value: string | number | null): number | null {
   if (value === null) return null
   const numeric = typeof value === "number" ? value : Number(value)
   return Number.isFinite(numeric) ? numeric : null
+}
+
+function calculateParticipationValue(
+  fullValue: string | number | null,
+  totalValue: string | number | null,
+): FullParticipationValue {
+  const full = toFiniteNumber(fullValue)
+  const total = toFiniteNumber(totalValue)
+
+  return {
+    fullValue: full,
+    totalValue: total,
+    percentage: full === null || total === null || total === 0 ? null : (full / total) * 100,
+  }
+}
+
+function buildParticipationTemporalComparison(
+  current: FullParticipationValue,
+  previous: FullParticipationValue,
+): FullParticipationTemporalComparison {
+  return {
+    current,
+    previous,
+    percentagePointVariation:
+      current.percentage === null || previous.percentage === null
+        ? null
+        : current.percentage - previous.percentage,
+  }
 }
 
 function signalTone(direction: TemporalDirection): TemporalSignalTone {

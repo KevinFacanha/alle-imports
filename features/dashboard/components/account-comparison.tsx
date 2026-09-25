@@ -17,6 +17,7 @@ import { ComparisonChart } from "./comparison-chart"
 import { ComparisonPerformance } from "./comparison-performance"
 import { ComparisonPeriodFilter } from "./comparison-period-filter"
 import { ComparisonSummary } from "./comparison-summary"
+import { FullParticipationAccountSection } from "./full-participation"
 import { DayComparison } from "./day-comparison"
 import { PeriodComparison } from "./period-comparison"
 
@@ -99,6 +100,7 @@ export function AccountComparison({
 
             {mode === "accounts" && <>
               <ComparisonSummary accounts={comparison.comparison.accounts} />
+              <FullParticipationAccountSection accounts={comparison.comparison.accounts} />
               <ComparisonPerformance accounts={comparison.comparison.accounts} />
 
               <section aria-labelledby="comparison-charts-title">

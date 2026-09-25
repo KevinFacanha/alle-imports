@@ -3,6 +3,7 @@ import { AlertTriangle, CalendarRange, CheckCircle2, Sparkles } from "lucide-rea
 import {
   buildAccountComparisonFacts,
   compareAccountPeriods,
+  compareFullParticipation,
   formatComparisonDate,
   getPrimaryTemporalSignals,
   isComparisonPeriodPartial,
@@ -15,6 +16,7 @@ import type {
   SellerMetricsComparisonAccount,
 } from "@/types/seller-metrics"
 
+import { FullParticipationTemporalSection } from "./full-participation"
 import { TemporalComparisonPanel } from "./temporal-comparison-panel"
 
 export function PeriodComparison({
@@ -39,6 +41,7 @@ export function PeriodComparison({
       account,
       accountLabel: `Conta ${index + 1}`,
       results,
+      fullParticipation: compareFullParticipation(account.summary, previousAccount?.summary ?? null),
       signals: getPrimaryTemporalSignals(results),
       accent: index === 0 ? "violet" as const : "teal" as const,
     }
@@ -109,6 +112,18 @@ export function PeriodComparison({
           ))}
         </ComparisonNotice>
       )}
+
+      <FullParticipationTemporalSection
+        currentLabel="Atual"
+        previousLabel="Anterior"
+        accounts={accountViews.map(({ account, accountLabel, accent, fullParticipation }) => ({
+          id: account.marketplaceAccountId,
+          label: accountLabel,
+          name: account.name,
+          accent,
+          comparison: fullParticipation,
+        }))}
+      />
 
       <section
         aria-labelledby="period-insights-title"

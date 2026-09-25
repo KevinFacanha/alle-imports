@@ -4,10 +4,16 @@ import { useEffect, useMemo, useState } from "react"
 import { AlertTriangle, CalendarDays, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { compareAccountDays, formatComparisonDate } from "@/features/dashboard/lib/comparison-metrics"
+import {
+  compareAccountDays,
+  compareFullParticipation,
+  formatComparisonDate,
+  getAccountDayParticipation,
+} from "@/features/dashboard/lib/comparison-metrics"
 import { getSellerMetricsComparison } from "@/services/seller-metrics"
 import type { SellerMetricsComparison, SellerMetricsComparisonAccount } from "@/types/seller-metrics"
 
+import { FullParticipationTemporalSection } from "./full-participation"
 import { TemporalComparisonPanel } from "./temporal-comparison-panel"
 
 type AccountFilter = "account-1" | "account-2" | "both"
@@ -138,6 +144,28 @@ export function DayComparison({
               Métricas sem snapshot aparecem como Indisponível.
             </div>
           )}
+          <FullParticipationTemporalSection
+            currentLabel={formatComparisonDate(appliedDates.dateA)}
+            previousLabel={formatComparisonDate(appliedDates.dateB)}
+            accounts={visibleAccounts.map((account) => {
+              const accountA = findAccount(result.dateA!, account.marketplaceAccountId)
+              const accountB = findAccount(result.dateB!, account.marketplaceAccountId)
+              const originalIndex = accounts.findIndex(
+                (item) => item.marketplaceAccountId === account.marketplaceAccountId,
+              )
+
+              return {
+                id: account.marketplaceAccountId,
+                label: `Conta ${originalIndex + 1}`,
+                name: account.name,
+                accent: originalIndex === 0 ? "violet" : "teal",
+                comparison: compareFullParticipation(
+                  getAccountDayParticipation(accountA, appliedDates.dateA),
+                  getAccountDayParticipation(accountB, appliedDates.dateB),
+                ),
+              }
+            })}
+          />
           <div className="grid gap-5">
             {visibleAccounts.map((account) => {
               const accountA = findAccount(result.dateA!, account.marketplaceAccountId)
