@@ -17,6 +17,10 @@ import { ComparisonChart } from "./comparison-chart"
 import { ComparisonPerformance } from "./comparison-performance"
 import { ComparisonPeriodFilter } from "./comparison-period-filter"
 import { ComparisonSummary } from "./comparison-summary"
+import { DayComparison } from "./day-comparison"
+import { PeriodComparison } from "./period-comparison"
+
+type ComparisonMode = "accounts" | "periods" | "days"
 
 export function AccountComparison({
   onViewChange,
@@ -26,6 +30,7 @@ export function AccountComparison({
   const comparison = useAccountComparison()
   const [salesMetric, setSalesMetric] =
     useState<Extract<ComparisonMetricName, "salesCount" | "fullSalesCount">>("salesCount")
+  const [mode, setMode] = useState<ComparisonMode>("accounts")
 
   const periodControls = (
     <ComparisonPeriodFilter
@@ -43,7 +48,7 @@ export function AccountComparison({
     <section className="space-y-6" aria-labelledby="commercial-intelligence-title">
       <CommercialHeader
         view="comparison"
-        controls={periodControls}
+        controls={mode === "days" ? undefined : periodControls}
         onViewChange={onViewChange}
       />
 
@@ -84,14 +89,19 @@ export function AccountComparison({
       {(comparison.state === "success" || comparison.state === "partial") &&
         comparison.comparison && (
           <div className="space-y-7">
-            <ComparisonCompleteness
-              accounts={comparison.comparison.accounts}
-              partial={comparison.state === "partial"}
-            />
-            <ComparisonSummary accounts={comparison.comparison.accounts} />
-            <ComparisonPerformance accounts={comparison.comparison.accounts} />
+            <ComparisonModeSelector value={mode} onChange={setMode} />
+            {mode === "accounts" && (
+              <ComparisonCompleteness
+                accounts={comparison.comparison.accounts}
+                partial={comparison.state === "partial"}
+              />
+            )}
 
-            <section aria-labelledby="comparison-charts-title">
+            {mode === "accounts" && <>
+              <ComparisonSummary accounts={comparison.comparison.accounts} />
+              <ComparisonPerformance accounts={comparison.comparison.accounts} />
+
+              <section aria-labelledby="comparison-charts-title">
               <div className="mb-4">
                 <h3
                   id="comparison-charts-title"
@@ -148,10 +158,64 @@ export function AccountComparison({
                   }
                 />
               </div>
-            </section>
+              </section>
+            </>}
+
+            {mode === "periods" && (
+              <PeriodComparison
+                current={comparison.comparison}
+                previous={comparison.previousComparison}
+                previousPeriod={comparison.previousPeriod}
+                state={comparison.temporalState}
+              />
+            )}
+
+            {mode === "days" && comparison.period && (
+              <DayComparison
+                accounts={comparison.comparison.accounts}
+                initialDateA={comparison.period.to}
+                initialDateB={comparison.previousPeriod?.to ?? comparison.period.from}
+              />
+            )}
+
           </div>
         )}
     </section>
+  )
+}
+
+function ComparisonModeSelector({
+  value,
+  onChange,
+}: {
+  value: ComparisonMode
+  onChange: (value: ComparisonMode) => void
+}) {
+  const options: { value: ComparisonMode; label: string }[] = [
+    { value: "accounts", label: "Conta × Conta" },
+    { value: "periods", label: "Período × Período" },
+    { value: "days", label: "Dia × Dia" },
+  ]
+
+  return (
+    <nav
+      aria-label="Modo de comparação"
+      className="grid grid-cols-3 rounded-2xl border border-slate-200 bg-slate-50 p-1"
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-current={value === option.value ? "page" : undefined}
+          onClick={() => onChange(option.value)}
+          className={value === option.value
+            ? "min-w-0 rounded-xl bg-white px-2 py-2.5 text-[10px] font-bold text-[#6254d9] shadow-sm sm:px-4 sm:text-xs"
+            : "min-w-0 rounded-xl px-2 py-2.5 text-[10px] font-semibold text-slate-500 transition hover:text-slate-800 sm:px-4 sm:text-xs"}
+        >
+          {option.label}
+        </button>
+      ))}
+    </nav>
   )
 }
 

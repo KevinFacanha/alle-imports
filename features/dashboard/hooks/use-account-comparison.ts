@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
+  getPreviousPeriod,
+  isComparisonPeriodPartial,
+  type ComparisonPeriod,
+} from "@/features/dashboard/lib/comparison-metrics"
+import {
   getSellerMetricAccounts,
   getSellerMetricsComparison,
 } from "@/services/seller-metrics"
@@ -13,18 +18,18 @@ import type {
 
 export type ComparisonPeriodPreset = 7 | 15 | 30 | "custom"
 
-export interface ComparisonPeriod {
-  from: string
-  to: string
-}
+export type { ComparisonPeriod } from "@/features/dashboard/lib/comparison-metrics"
 
 export interface AccountComparisonViewModel {
   accounts: MarketplaceAccountSummary[]
   comparison: SellerMetricsComparison | null
+  previousComparison: SellerMetricsComparison | null
   period: ComparisonPeriod | null
+  previousPeriod: ComparisonPeriod | null
   preset: ComparisonPeriodPreset
   latestAvailableDate: string | null
   state: "loading" | "error" | "empty" | "partial" | "success"
+  temporalState: "idle" | "loading" | "success" | "error"
   errorMessage: string | null
   setPreset: (preset: Exclude<ComparisonPeriodPreset, "custom">) => void
   showCustom: () => void
@@ -39,12 +44,14 @@ const MAX_PERIOD_DAYS = 31
 export function useAccountComparison(): AccountComparisonViewModel {
   const [accounts, setAccounts] = useState<MarketplaceAccountSummary[]>([])
   const [comparison, setComparison] = useState<SellerMetricsComparison | null>(null)
+  const [previousComparison, setPreviousComparison] = useState<SellerMetricsComparison | null>(null)
   const [period, setPeriod] = useState<ComparisonPeriod | null>(null)
   const [preset, setPresetState] = useState<ComparisonPeriodPreset>(7)
   const [latestAvailableDate, setLatestAvailableDate] = useState<string | null>(null)
   const [accountsState, setAccountsState] = useState<"loading" | "success" | "error">("loading")
   const [discoveryState, setDiscoveryState] = useState<"idle" | "loading" | "success" | "error">("idle")
   const [comparisonState, setComparisonState] = useState<"idle" | "loading" | "success" | "error">("idle")
+  const [temporalState, setTemporalState] = useState<"idle" | "loading" | "success" | "error">("idle")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
 
@@ -57,6 +64,8 @@ export function useAccountComparison(): AccountComparisonViewModel {
     setDiscoveryState("idle")
     setComparisonState("idle")
     setComparison(null)
+    setPreviousComparison(null)
+    setTemporalState("idle")
     setPeriod(null)
     setLatestAvailableDate(null)
     setErrorMessage(null)
@@ -118,18 +127,30 @@ export function useAccountComparison(): AccountComparisonViewModel {
     if (!comparisonAccounts || !period || discoveryState !== "success") return
 
     const controller = new AbortController()
+    const previousPeriod = getPreviousPeriod(period)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setComparisonState("loading")
     setComparison(null)
+    setPreviousComparison(null)
+    setTemporalState("loading")
     setErrorMessage(null)
 
-    getSellerMetricsComparison(
+    const currentRequest = getSellerMetricsComparison(
       comparisonAccounts[0].id,
       comparisonAccounts[1].id,
       period.from,
       period.to,
       controller.signal,
     )
+    const previousRequest = getSellerMetricsComparison(
+      comparisonAccounts[0].id,
+      comparisonAccounts[1].id,
+      previousPeriod.from,
+      previousPeriod.to,
+      controller.signal,
+    )
+
+    currentRequest
       .then((response) => {
         setComparison(response)
         setComparisonState("success")
@@ -138,6 +159,17 @@ export function useAccountComparison(): AccountComparisonViewModel {
         if (isAbort(error)) return
         setComparisonState("error")
         setErrorMessage("Não foi possível carregar a comparação deste período.")
+      })
+
+    previousRequest
+      .then((response) => {
+        setPreviousComparison(response)
+        setTemporalState("success")
+      })
+      .catch((error: unknown) => {
+        if (isAbort(error)) return
+        setPreviousComparison(null)
+        setTemporalState("error")
       })
 
     return () => controller.abort()
@@ -172,10 +204,13 @@ export function useAccountComparison(): AccountComparisonViewModel {
   return {
     accounts,
     comparison,
+    previousComparison,
     period,
+    previousPeriod: period ? getPreviousPeriod(period) : null,
     preset,
     latestAvailableDate,
     state,
+    temporalState,
     errorMessage,
     setPreset,
     showCustom,
@@ -242,11 +277,7 @@ function resolveState({
   if (!comparison || comparison.accounts.every((account) => account.availableDays === 0)) {
     return "empty"
   }
-  const isPartial = comparison.accounts.some(
-    (account) =>
-      account.missingDays > 0 ||
-      account.days.some((day) => day.snapshotAvailable && day.status === "PARTIAL"),
-  )
+  const isPartial = isComparisonPeriodPartial(comparison.accounts)
   return isPartial ? "partial" : "success"
 }
 

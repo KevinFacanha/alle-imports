@@ -1,0 +1,39 @@
+--- features/dashboard/lib/comparison-metrics.ts
++++ features/dashboard/lib/comparison-metrics.ts
+@@ -14,15 +14,36 @@
+ export type TemporalDirection = "increase" | "decrease" | "stable"
+ 
+ export interface TemporalMetricComparison {
+   current: number | null
+   previous: number | null
+   absoluteDifference: number | null
+   variation: number | null
+   direction: TemporalDirection | null
+ }
++
++export interface ComparisonMetricDefinition {
++  name: ComparisonMetricName
++  label: string
++  format: ComparisonMetricFormat
++  usePercentagePoints?: boolean
++}
++
++export interface ComparisonMetricResult {
++  metric: ComparisonMetricDefinition
++  comparison: TemporalMetricComparison
++}
++
++export const comparisonMetricDefinitions: ComparisonMetricDefinition[] = [
++  { name: "grossSales", label: "Faturamento", format: "currency" },
++  { name: "marginRate", label: "Margem", format: "percentage", usePercentagePoints: true },
++  { name: "fullGrossSales", label: "Faturamento Full", format: "currency" },
++  { name: "averageTicket", label: "Ticket médio", format: "currency" },
++  { name: "salesCount", label: "Vendas", format: "integer" },
++  { name: "fullSalesCount", label: "Vendas Full", format: "integer" },
++]
+ 
+ export interface DailyMetricPeak {
+   date: string
+   value: number
+ }
+ 
