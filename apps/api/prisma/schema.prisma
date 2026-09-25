@@ -13,6 +13,12 @@ enum Marketplace {
   SHOPEE
 }
 
+enum ProductIdentityProvider {
+  MERCADO_LIVRE
+  OLIST
+  SHOPEE
+}
+
 enum MarketplaceOrderStatus {
   PENDING
   PAID
@@ -59,20 +65,36 @@ enum DailySellerMetricConfidence {
 }
 
 model Product {
-  id           String                   @id @default(uuid()) @db.Uuid
-  sku          String                   @unique(map: "products_sku_key")
-  name         String
-  active       Boolean                  @default(true)
-  createdAt    DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
-  listingItems MarketplaceListingItem[]
-  orderItems   MarketplaceOrderItem[]
+  id                 String                    @id @default(uuid()) @db.Uuid
+  sku                String                    @unique(map: "products_sku_key")
+  name               String
+  active             Boolean                   @default(true)
+  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  externalIdentities ProductExternalIdentity[]
+  listingItems       MarketplaceListingItem[]
+  orderItems         MarketplaceOrderItem[]
 
   @@map("products")
 }
 
+model BusinessAccount {
+  id                        String                    @id @default(uuid()) @db.Uuid
+  code                      String                    @unique(map: "business_accounts_code_key")
+  displayName               String                    @map("display_name")
+  active                    Boolean                   @default(true)
+  createdAt                 DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccounts       MarketplaceAccount[]
+  olistAccounts             OlistAccount[]
+  productExternalIdentities ProductExternalIdentity[]
+
+  @@map("business_accounts")
+}
+
 model MarketplaceAccount {
   id                 String                    @id @default(uuid()) @db.Uuid
+  businessAccountId  String?                   @map("business_account_id") @db.Uuid
   marketplace        Marketplace
   externalAccountId  String                    @map("external_account_id")
   name               String
@@ -83,8 +105,10 @@ model MarketplaceAccount {
   listings           MarketplaceListing[]
   orders             MarketplaceOrder[]
   dailySellerMetrics DailySellerMetrics[]
+  businessAccount    BusinessAccount?          @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_accounts_business_account_id_fkey")
 
   @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
+  @@index([businessAccountId], map: "marketplace_accounts_business_account_id_idx")
   @@map("marketplace_accounts")
 }
 
@@ -138,13 +162,16 @@ model MarketplaceAuthorization {
 
 model OlistAccount {
   id                String              @id @default(uuid()) @db.Uuid
+  businessAccountId String?             @map("business_account_id") @db.Uuid
   externalAccountId String              @unique(map: "olist_accounts_external_account_id_key") @map("external_account_id")
   name              String
   active            Boolean             @default(true)
   createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   authorization     OlistAuthorization?
+  businessAccount   BusinessAccount?    @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "olist_accounts_business_account_id_fkey")
 
+  @@index([businessAccountId], map: "olist_accounts_business_account_id_idx")
   @@map("olist_accounts")
 }
 
@@ -182,24 +209,50 @@ model MarketplaceListing {
 }
 
 model MarketplaceListingItem {
-  id                   String                 @id @default(uuid()) @db.Uuid
-  marketplaceListingId String                 @map("marketplace_listing_id") @db.Uuid
-  productId            String?                @map("product_id") @db.Uuid
-  externalSellableId   String                 @map("external_sellable_id")
-  sellerSku            String?                @map("seller_sku")
-  variationLabel       String?                @map("variation_label")
-  active               Boolean                @default(true)
-  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  marketplaceListing   MarketplaceListing     @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
-  product              Product?               @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
+  id                   String                    @id @default(uuid()) @db.Uuid
+  marketplaceListingId String                    @map("marketplace_listing_id") @db.Uuid
+  productId            String?                   @map("product_id") @db.Uuid
+  externalSellableId   String                    @map("external_sellable_id")
+  sellerSku            String?                   @map("seller_sku")
+  variationLabel       String?                   @map("variation_label")
+  active               Boolean                   @default(true)
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceListing   MarketplaceListing        @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
+  product              Product?                  @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
   orderItems           MarketplaceOrderItem[]
+  externalIdentities   ProductExternalIdentity[]
 
   @@unique([marketplaceListingId, externalSellableId], map: "marketplace_listing_items_listing_external_sellable_id_key")
   @@index([marketplaceListingId], map: "marketplace_listing_items_marketplace_listing_id_idx")
   @@index([productId], map: "marketplace_listing_items_product_id_idx")
   @@index([sellerSku], map: "marketplace_listing_items_seller_sku_idx")
   @@map("marketplace_listing_items")
+}
+
+model ProductExternalIdentity {
+  id                       String                  @id @default(uuid()) @db.Uuid
+  productId                String                  @map("product_id") @db.Uuid
+  businessAccountId        String                  @map("business_account_id") @db.Uuid
+  provider                 ProductIdentityProvider
+  sellerSku                String?                 @map("seller_sku")
+  externalListingId        String?                 @map("external_listing_id")
+  externalVariationId      String?                 @map("external_variation_id")
+  marketplaceListingItemId String?                 @map("marketplace_listing_item_id") @db.Uuid
+  validFrom                DateTime                @default(now()) @map("valid_from") @db.Timestamptz(3)
+  validTo                  DateTime?               @map("valid_to") @db.Timestamptz(3)
+  createdAt                DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  product                  Product                 @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "product_external_identities_product_id_fkey")
+  businessAccount          BusinessAccount         @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "product_external_identities_business_account_id_fkey")
+  marketplaceListingItem   MarketplaceListingItem? @relation(fields: [marketplaceListingItemId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "product_external_identities_marketplace_listing_item_id_fkey")
+
+  @@index([productId], map: "product_external_identities_product_id_idx")
+  @@index([businessAccountId, provider], map: "product_external_identities_account_provider_idx")
+  @@index([businessAccountId, provider, sellerSku], map: "product_external_identities_account_provider_seller_sku_idx")
+  @@index([businessAccountId, provider, externalListingId, externalVariationId], map: "product_external_identities_external_sellable_idx")
+  @@index([marketplaceListingItemId], map: "product_external_identities_listing_item_idx")
+  @@map("product_external_identities")
 }
 
 model MarketplaceOrder {

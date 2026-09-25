@@ -570,6 +570,7 @@ class OlistOAuthDatabaseFake {
 
           const account: OlistAccount = {
             id: `10000000-0000-4000-8000-${String(this.accounts.length + 1).padStart(12, '0')}`,
+            businessAccountId: null,
             ...args.create,
             createdAt: new Date(),
             updatedAt: new Date(),

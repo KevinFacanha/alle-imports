@@ -93,6 +93,37 @@ describe('GeFinanceImportService', () => {
     assert.equal(result.olistAccount.integrationKey, 'c1');
   });
 
+  it('prefers formal BusinessAccount identity over names and integration keys', async () => {
+    const service = createService(
+      [
+        {
+          id: 'ml-formal-c2',
+          name: 'Nome sem ordinal',
+          businessAccountCode: 'C2',
+        },
+        { id: 'ml-legacy-c2', name: 'LEGACY 2' },
+      ],
+      [
+        {
+          id: 'olist-formal-c2',
+          name: 'Nome sem identidade textual',
+          integrationKey: 'credential-slot',
+          businessAccountCode: 'C2',
+        },
+        { id: 'olist-legacy-c2', name: 'Legacy', integrationKey: 'c2' },
+      ],
+    );
+
+    const result = await service.execute({
+      file: '/reports/gefinance-c2.xlsx',
+      sha256: SHA256,
+    });
+
+    assert.equal(result.marketplaceAccount.id, 'ml-formal-c2');
+    assert.equal(result.olistAccount.id, 'olist-formal-c2');
+    assert.equal(result.olistAccount.integrationKey, 'credential-slot');
+  });
+
   it('detects the report scope, resolves exact related accounts and reuses the backfill service', async () => {
     const provider = {
       inspectReport: async () => INSPECTION,
@@ -258,8 +289,8 @@ describe('GeFinanceImportService', () => {
 });
 
 function createService(
-  marketplaceAccounts: Array<{ id: string; name: string }>,
-  olistAccounts: Array<{ id: string; name: string; integrationKey: string }>,
+  marketplaceAccounts: MarketplaceAccountFixture[],
+  olistAccounts: OlistAccountFixture[],
 ): GeFinanceImportService {
   return new GeFinanceImportService(
     database(marketplaceAccounts, olistAccounts) as never,
@@ -271,17 +302,46 @@ function createService(
   );
 }
 
+interface MarketplaceAccountFixture {
+  id: string;
+  name: string;
+  businessAccountCode?: string | null;
+}
+
+interface OlistAccountFixture {
+  id: string;
+  name: string;
+  integrationKey: string;
+  businessAccountCode?: string | null;
+}
+
 function database(
-  marketplaceAccounts: Array<{ id: string; name: string }>,
-  olistAccounts: Array<{ id: string; name: string; integrationKey: string }>,
+  marketplaceAccounts: MarketplaceAccountFixture[],
+  olistAccounts: OlistAccountFixture[],
 ) {
   return {
-    marketplaceAccount: { findMany: async () => marketplaceAccounts },
+    marketplaceAccount: {
+      findMany: async () =>
+        marketplaceAccounts.map(({ businessAccountCode, ...account }) => ({
+          ...account,
+          businessAccount:
+            businessAccountCode == null
+              ? null
+              : { code: businessAccountCode },
+        })),
+    },
     olistAccount: {
-      findMany: async () => olistAccounts.map(({ integrationKey, ...account }) => ({
-        ...account,
-        authorization: { integrationKey },
-      })),
+      findMany: async () =>
+        olistAccounts.map(
+          ({ integrationKey, businessAccountCode, ...account }) => ({
+            ...account,
+            businessAccount:
+              businessAccountCode == null
+                ? null
+                : { code: businessAccountCode },
+            authorization: { integrationKey },
+          }),
+        ),
     },
   };
 }

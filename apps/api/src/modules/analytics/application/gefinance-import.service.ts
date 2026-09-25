@@ -173,38 +173,51 @@ export class GeFinanceImportService {
     marketplaceAccount: { id: string; name: string };
     olistAccount: { id: string; name: string; integrationKey: string };
   }> {
+    const businessAccountCode = `C${accountOrdinal}`;
     const [marketplaceAccounts, olistAccounts] = await Promise.all([
       this.database.marketplaceAccount.findMany({
         where: { marketplace: Marketplace.MERCADO_LIVRE, active: true },
-        select: { id: true, name: true },
+        select: {
+          id: true,
+          name: true,
+          businessAccount: { select: { code: true } },
+        },
       }),
       this.database.olistAccount.findMany({
         where: { active: true },
         select: {
           id: true,
           name: true,
+          businessAccount: { select: { code: true } },
           authorization: { select: { integrationKey: true } },
         },
       }),
     ]);
-    const marketplaceMatches = marketplaceAccounts.filter(
+    const marketplaceMatches = preferBusinessAccountIdentity(
+      marketplaceAccounts,
+      businessAccountCode,
       ({ name }) => accountNameParts(name).ordinal === accountOrdinal,
     );
     if (marketplaceMatches.length !== 1) {
       throw new GeFinanceImportError(
-        `Não foi possível identificar de forma inequívoca a MarketplaceAccount da conta ${accountOrdinal}: esperada 1 conta Mercado Livre ativa, encontradas ${marketplaceMatches.length}.`,
+        `Não foi possível identificar de forma inequívoca a MarketplaceAccount de ${businessAccountCode}: esperada 1 conta Mercado Livre ativa, encontradas ${marketplaceMatches.length}.`,
       );
     }
 
     const marketplaceAccount = marketplaceMatches[0]!;
     const expectedIntegrationKey = `c${accountOrdinal}`;
-    const olistMatches = olistAccounts.filter(
+    const authorizedOlistAccounts = olistAccounts.filter(
+      ({ authorization }) => authorization !== null,
+    );
+    const olistMatches = preferBusinessAccountIdentity(
+      authorizedOlistAccounts,
+      businessAccountCode,
       ({ authorization }) =>
         authorization?.integrationKey === expectedIntegrationKey,
     );
     if (olistMatches.length !== 1) {
       throw new GeFinanceImportError(
-        `Não foi possível identificar de forma inequívoca a OlistAccount relacionada a "${marketplaceAccount.name}": esperada 1 conta Olist ativa com integrationKey=${expectedIntegrationKey}, encontradas ${olistMatches.length}.`,
+        `Não foi possível identificar de forma inequívoca a OlistAccount de ${businessAccountCode}: esperada 1 conta Olist ativa, encontradas ${olistMatches.length}.`,
       );
     }
 
@@ -218,6 +231,26 @@ export class GeFinanceImportService {
       },
     };
   }
+}
+
+function preferBusinessAccountIdentity<
+  T extends { businessAccount?: { code: string } | null },
+>(
+  accounts: T[],
+  businessAccountCode: string,
+  legacyMatch: (account: T) => boolean,
+): T[] {
+  const formallyLinked = accounts.filter(
+    ({ businessAccount }) => businessAccount?.code === businessAccountCode,
+  );
+
+  if (formallyLinked.length > 0) {
+    return formallyLinked;
+  }
+
+  return accounts.filter(
+    (account) => account.businessAccount == null && legacyMatch(account),
+  );
 }
 
 function reportAccountOrdinal(report: GeFinanceReportInspection): number {

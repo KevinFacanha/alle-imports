@@ -19,6 +19,7 @@ const DATE_FROM = new Date('2026-09-01T00:00:00.000Z');
 const DATE_TO = new Date('2026-09-02T00:00:00.000Z');
 const MARKETPLACE_ACCOUNT: MarketplaceAccount = {
   id: '00000000-0000-4000-8000-000000000001',
+  businessAccountId: null,
   marketplace: Marketplace.MERCADO_LIVRE,
   externalAccountId: 'seller-123',
   name: 'Seller 123',

@@ -454,6 +454,7 @@ function makeAccount(
 ): MarketplaceAccount {
   return {
     id: ACCOUNT_ID,
+    businessAccountId: null,
     marketplace: Marketplace.MERCADO_LIVRE,
     externalAccountId: 'seller-123',
     name: 'Seller 123',
