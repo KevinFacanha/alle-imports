@@ -9,6 +9,8 @@ import {
   MERCADO_LIVRE_HTTP_TIMEOUT_MS,
   MercadoLivreClient,
 } from './mercado-livre.client.js';
+import { MercadoLivreCatalogClient } from './mercado-livre-catalog.client.js';
+import { MercadoLivreCatalogSyncService } from './mercado-livre-catalog-sync.service.js';
 import { MercadoLivreOrdersProvider } from './mercado-livre-orders.provider.js';
 import {
   MERCADO_LIVRE_OAUTH_FETCH,
@@ -47,6 +49,8 @@ import { MarketplaceAuthorizationService } from './oauth/marketplace-authorizati
       useValue: 10_000,
     },
     MercadoLivreClient,
+    MercadoLivreCatalogClient,
+    MercadoLivreCatalogSyncService,
     MercadoLivreOrdersProvider,
     OrdersIngestionService,
     {
@@ -57,6 +61,8 @@ import { MarketplaceAuthorizationService } from './oauth/marketplace-authorizati
   exports: [
     MARKETPLACE_ORDERS_PROVIDER,
     MercadoLivreClient,
+    MercadoLivreCatalogClient,
+    MercadoLivreCatalogSyncService,
     MercadoLivreOrdersProvider,
     MarketplaceAuthorizationService,
     OrdersIngestionService,
