@@ -137,6 +137,30 @@ describe('MarketplaceOrderBackfillService', () => {
     assert.ok(database.orders.has(`${C1_ID}|partial-order`));
   });
 
+  it('uses one short interactive transaction per order instead of one per page', async () => {
+    const database = new BackfillDatabase(5);
+    const provider = new BackfillProvider(() => database.orders.size);
+    provider.enqueue(
+      page(
+        [
+          makeOrder({ externalOrderId: 'order-a' }),
+          makeOrder({ externalOrderId: 'order-b' }),
+          makeOrder({ externalOrderId: 'order-c' }),
+        ],
+        0,
+        null,
+        3,
+      ),
+    );
+
+    const result = await makeService(database, provider).start(options('c2'));
+
+    assert.equal(result.status, MarketplaceOrderBackfillStatus.COMPLETED);
+    assert.deepEqual(database.interactiveTransactionQueryCounts, [5, 5, 5]);
+    assert.equal(database.orders.size, 3);
+    assert.equal(database.items.size, 3);
+  });
+
   it('estimates one-day chunks without creating a run', async () => {
     const database = new BackfillDatabase();
     const service = makeService(
@@ -229,8 +253,13 @@ class BackfillDatabase {
   readonly items = new Map<string, Record<string, unknown>>();
   readonly catalog = new Map<string, string>();
   productWrites = 0;
+  readonly interactiveTransactionQueryCounts: number[] = [];
   private runSequence = 0;
   private chunkSequence = 0;
+
+  constructor(
+    private readonly interactiveTransactionQueryLimit = Number.POSITIVE_INFINITY,
+  ) {}
 
   readonly marketplaceAccount = {
     findUnique: async (args: AccountFindArgs) =>
@@ -338,7 +367,32 @@ class BackfillDatabase {
   async $transaction(input: unknown): Promise<unknown> {
     if (Array.isArray(input)) return Promise.all(input);
     if (typeof input === 'function') {
-      return (input as (transaction: unknown) => Promise<unknown>)(this.transaction);
+      let queryCount = 0;
+      const countQuery = async <T>(operation: () => Promise<T>): Promise<T> => {
+        queryCount += 1;
+        if (queryCount > this.interactiveTransactionQueryLimit) {
+          throw new Error('P2028: interactive transaction expired.');
+        }
+        return operation();
+      };
+      const transaction = {
+        marketplaceOrder: wrapModel(this.transaction.marketplaceOrder, countQuery),
+        marketplaceListing: wrapModel(
+          this.transaction.marketplaceListing,
+          countQuery,
+        ),
+        marketplaceOrderItem: wrapModel(
+          this.transaction.marketplaceOrderItem,
+          countQuery,
+        ),
+      };
+      try {
+        return await (input as (transaction: unknown) => Promise<unknown>)(
+          transaction,
+        );
+      } finally {
+        this.interactiveTransactionQueryCounts.push(queryCount);
+      }
     }
     throw new Error('Unsupported transaction.');
   }
@@ -409,6 +463,25 @@ class BackfillDatabase {
     if (!order) throw new Error('Persisted order not found.');
     return `${order[0]}|${identity.externalListingId}|${identity.externalSellableId}`;
   }
+}
+
+function wrapModel<T extends object>(
+  model: T,
+  countQuery: <R>(operation: () => Promise<R>) => Promise<R>,
+): T {
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver) as unknown;
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) =>
+        countQuery(() =>
+          (value as (...operationArgs: unknown[]) => Promise<unknown>).apply(
+            target,
+            args,
+          ),
+        );
+    },
+  }) as T;
 }
 
 interface AccountFindArgs {

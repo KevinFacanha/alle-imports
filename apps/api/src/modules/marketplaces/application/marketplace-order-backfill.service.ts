@@ -401,34 +401,39 @@ export class MarketplaceOrderBackfillService {
         },
       );
 
-      const persisted = await this.database.$transaction(async (transaction) => {
-        const totals = emptyPersistenceCounts();
-        for (const order of page.orders) {
-          addPersistenceCounts(
-            totals,
-            await persistMarketplaceOrder(transaction, account.id, order),
-          );
-        }
-        const itemCount = page.orders.reduce(
-          (total, order) => total + order.items.length,
-          0,
+      const totals = emptyPersistenceCounts();
+      for (const order of page.orders) {
+        addPersistenceCounts(
+          totals,
+          await this.database.$transaction((transaction) =>
+            persistMarketplaceOrder(transaction, account.id, order),
+          ),
         );
-        const mappedItems = itemCount - totals.unmappedItems;
+      }
+      const itemCount = page.orders.reduce(
+        (total, order) => total + order.items.length,
+        0,
+      );
+      const mappedItems = itemCount - totals.unmappedItems;
 
-        if (page.partial) {
-          await transaction.marketplaceOrderBackfillChunk.update({
-            where: { id: chunkId },
-            data: {
-              totalOrders: page.total,
-              partial: true,
-              lastError: 'Mercado Livre returned partial content (HTTP 206).',
-            },
-          });
-          return { partial: true, hasMore: page.hasMore, nextOffset: offset };
-        }
+      if (page.partial) {
+        await this.database.marketplaceOrderBackfillChunk.update({
+          where: { id: chunkId },
+          data: {
+            totalOrders: page.total,
+            partial: true,
+            lastError: 'Mercado Livre returned partial content (HTTP 206).',
+          },
+        });
+        throw new MarketplaceOrderBackfillError(
+          'PARTIAL_CONTENT',
+          'Mercado Livre returned partial content (HTTP 206); the chunk remains incomplete.',
+        );
+      }
 
-        const nextOffset = page.nextOffset ?? Math.max(page.total, page.offset);
-        await transaction.marketplaceOrderBackfillChunk.update({
+      const nextOffset = page.nextOffset ?? Math.max(page.total, page.offset);
+      await this.database.$transaction([
+        this.database.marketplaceOrderBackfillChunk.update({
           where: { id: chunkId },
           data: {
             nextOffset,
@@ -443,8 +448,8 @@ export class MarketplaceOrderBackfillService {
               : MarketplaceOrderBackfillStatus.COMPLETED,
             completedAt: page.hasMore ? null : new Date(),
           },
-        });
-        await transaction.marketplaceOrderBackfillRun.update({
+        }),
+        this.database.marketplaceOrderBackfillRun.update({
           where: { id: runId, executionId },
           data: {
             heartbeatAt: new Date(),
@@ -453,18 +458,11 @@ export class MarketplaceOrderBackfillService {
             itemsMapped: { increment: mappedItems },
             itemsUnmapped: { increment: totals.unmappedItems },
           },
-        });
-        return { partial: false, hasMore: page.hasMore, nextOffset };
-      });
+        }),
+      ]);
 
-      if (persisted.partial) {
-        throw new MarketplaceOrderBackfillError(
-          'PARTIAL_CONTENT',
-          'Mercado Livre returned partial content (HTTP 206); the chunk remains incomplete.',
-        );
-      }
-      if (!persisted.hasMore) return;
-      offset = persisted.nextOffset;
+      if (!page.hasMore) return;
+      offset = nextOffset;
     }
   }
 
