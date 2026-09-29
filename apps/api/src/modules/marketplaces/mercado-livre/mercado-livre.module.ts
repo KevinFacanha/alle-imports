@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { OAuthSecurityModule } from '../../integrations/oauth/oauth-security.module.js';
 import { OrdersIngestionService } from '../application/orders-ingestion.service.js';
+import { MarketplaceOrderBackfillService } from '../application/marketplace-order-backfill.service.js';
 import { MARKETPLACE_ORDERS_PROVIDER } from '../domain/marketplace-orders.provider.js';
 import {
   MERCADO_LIVRE_ACCESS_TOKEN_PROVIDER,
@@ -53,6 +54,7 @@ import { MarketplaceAuthorizationService } from './oauth/marketplace-authorizati
     MercadoLivreCatalogSyncService,
     MercadoLivreOrdersProvider,
     OrdersIngestionService,
+    MarketplaceOrderBackfillService,
     {
       provide: MARKETPLACE_ORDERS_PROVIDER,
       useExisting: MercadoLivreOrdersProvider,
@@ -66,6 +68,7 @@ import { MarketplaceAuthorizationService } from './oauth/marketplace-authorizati
     MercadoLivreOrdersProvider,
     MarketplaceAuthorizationService,
     OrdersIngestionService,
+    MarketplaceOrderBackfillService,
   ],
 })
 export class MercadoLivreModule {}

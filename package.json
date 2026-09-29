@@ -15,6 +15,7 @@
     "test:api": "npm run test --workspace=@ale-intelligence/api",
     "analytics:daily-sales": "npm run analytics:daily-sales --workspace=@ale-intelligence/api --",
     "ingest:ml:orders": "npm run ingest:ml:orders --workspace=@ale-intelligence/api --",
+    "backfill:ml:orders": "npm run backfill:ml:orders --workspace=@ale-intelligence/api --",
     "sync:ml-catalog": "npm run sync:ml-catalog --workspace=@ale-intelligence/api --",
     "reconcile:ml:metrics": "npm run reconcile:ml:metrics --workspace=@ale-intelligence/api --",
     "reconcile:seller-metrics": "npm run reconcile:seller-metrics --workspace=@ale-intelligence/api --",

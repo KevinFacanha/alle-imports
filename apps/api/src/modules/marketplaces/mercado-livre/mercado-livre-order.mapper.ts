@@ -34,11 +34,18 @@ export function mapMercadoLivreOrder(
     rawStatus: source.status,
     normalizedStatus: mapMercadoLivreOrderStatus(source.status),
     soldAt: parseDate(source.date_created, 'order.date_created'),
+    closedAt: optionalDate(source.date_closed, 'order.date_closed'),
+    lastUpdatedAt: optionalDate(
+      source.date_last_updated,
+      'order.date_last_updated',
+    ),
     cancelledAt: source.cancel_detail?.date
       ? parseDate(source.cancel_detail.date, 'order.cancel_detail.date')
       : null,
     currency: source.currency_id,
     grossAmount: decimal(source.total_amount),
+    paidAmount: optionalDecimal(source.paid_amount),
+    refundedAmount: refundedAmount(source.payments),
     items: source.order_items.map((orderItem) => {
       const externalListingId = String(orderItem.item.id);
       const unitPrice = decimal(orderItem.unit_price);
@@ -50,6 +57,8 @@ export function mapMercadoLivreOrder(
           orderItem.item.variation_id === undefined
             ? externalListingId
             : String(orderItem.item.variation_id),
+        userProductId: nullableId(orderItem.item.user_product_id),
+        catalogProductId: nullableId(orderItem.item.catalog_product_id),
         sellerSku: orderItem.item.seller_sku ?? null,
         title: orderItem.item.title ?? null,
         quantity: orderItem.quantity,
@@ -75,6 +84,32 @@ function mapItemGrossAmount(
 
 function decimal(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value.toString());
+}
+
+function optionalDecimal(value: number | null | undefined): Prisma.Decimal | null {
+  return value === null || value === undefined ? null : decimal(value);
+}
+
+function refundedAmount(
+  payments: MercadoLivreOrder['payments'],
+): Prisma.Decimal | null {
+  if (!payments) return null;
+  return payments.reduce(
+    (total, payment) =>
+      total.add(optionalDecimal(payment.transaction_amount_refunded) ?? 0),
+    new Prisma.Decimal(0),
+  );
+}
+
+function nullableId(value: string | number | null | undefined): string | null {
+  return value === null || value === undefined ? null : String(value);
+}
+
+function optionalDate(
+  value: string | null | undefined,
+  field: string,
+): Date | null {
+  return value ? parseDate(value, field) : null;
 }
 
 function parseDate(value: string, field: string): Date {

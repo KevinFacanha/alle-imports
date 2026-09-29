@@ -31,6 +31,13 @@ enum MarketplaceOrderStatus {
   UNKNOWN
 }
 
+enum MarketplaceOrderBackfillStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
 enum DailySellerMetricName {
   SALES_COUNT
   UNITS_SOLD
@@ -88,6 +95,7 @@ model BusinessAccount {
   marketplaceAccounts       MarketplaceAccount[]
   olistAccounts             OlistAccount[]
   productExternalIdentities ProductExternalIdentity[]
+  marketplaceOrderBackfillRuns MarketplaceOrderBackfillRun[]
 
   @@map("business_accounts")
 }
@@ -105,6 +113,7 @@ model MarketplaceAccount {
   listings           MarketplaceListing[]
   orders             MarketplaceOrder[]
   dailySellerMetrics DailySellerMetrics[]
+  orderBackfillRuns  MarketplaceOrderBackfillRun[]
   businessAccount    BusinessAccount?          @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_accounts_business_account_id_fkey")
 
   @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
@@ -262,9 +271,13 @@ model MarketplaceOrder {
   normalizedStatus     MarketplaceOrderStatus @map("normalized_status")
   rawStatus            String?                @map("raw_status")
   soldAt               DateTime               @map("sold_at") @db.Timestamptz(3)
+  closedAt             DateTime?              @map("closed_at") @db.Timestamptz(3)
+  lastUpdatedAt        DateTime?              @map("last_updated_at") @db.Timestamptz(3)
   cancelledAt          DateTime?              @map("cancelled_at") @db.Timestamptz(3)
   currency             String                 @default("BRL")
   grossAmount          Decimal                @map("gross_amount") @db.Decimal(14, 2)
+  paidAmount           Decimal?               @map("paid_amount") @db.Decimal(14, 2)
+  refundedAmount       Decimal?               @map("refunded_amount") @db.Decimal(14, 2)
   createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
   marketplaceAccount   MarketplaceAccount     @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_orders_marketplace_account_id_fkey")
@@ -285,6 +298,8 @@ model MarketplaceOrderItem {
   productId                String?                 @map("product_id") @db.Uuid
   externalListingId        String                  @map("external_listing_id")
   externalSellableId       String                  @map("external_sellable_id")
+  userProductId            String?                 @map("user_product_id")
+  catalogProductId         String?                 @map("catalog_product_id")
   sellerSku                String?                 @map("seller_sku")
   title                    String?
   quantity                 Int
@@ -295,7 +310,7 @@ model MarketplaceOrderItem {
   marketplaceListingItem   MarketplaceListingItem? @relation(fields: [marketplaceListingItemId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "marketplace_order_items_marketplace_listing_item_id_fkey")
   product                  Product?                @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_order_items_product_id_fkey")
 
-  @@unique([marketplaceOrderId, externalSellableId], map: "marketplace_order_items_order_external_sellable_id_key")
+  @@unique([marketplaceOrderId, externalListingId, externalSellableId], map: "marketplace_order_items_order_listing_sellable_key")
   @@index([marketplaceOrderId], map: "marketplace_order_items_marketplace_order_id_idx")
   @@index([marketplaceListingItemId], map: "marketplace_order_items_marketplace_listing_item_id_idx")
   @@index([productId], map: "marketplace_order_items_product_id_idx")
@@ -303,4 +318,66 @@ model MarketplaceOrderItem {
   @@index([externalSellableId], map: "marketplace_order_items_external_sellable_id_idx")
   @@index([externalListingId], map: "marketplace_order_items_external_listing_id_idx")
   @@map("marketplace_order_items")
+}
+
+model MarketplaceOrderBackfillRun {
+  id                   String                          @id @default(uuid()) @db.Uuid
+  marketplaceAccountId String                          @map("marketplace_account_id") @db.Uuid
+  businessAccountId    String                          @map("business_account_id") @db.Uuid
+  dateFrom             DateTime                        @map("date_from") @db.Timestamptz(3)
+  dateTo               DateTime                        @map("date_to") @db.Timestamptz(3)
+  chunkDays            Int                             @default(1) @map("chunk_days")
+  maxRps               Decimal                         @default(1) @map("max_rps") @db.Decimal(10, 3)
+  maxAttempts          Int                             @default(5) @map("max_attempts")
+  status               MarketplaceOrderBackfillStatus @default(PENDING)
+  totalChunks          Int                             @map("total_chunks")
+  completedChunks      Int                             @default(0) @map("completed_chunks")
+  failedChunks         Int                             @default(0) @map("failed_chunks")
+  attempts             Int                             @default(0)
+  pagesProcessed       Int                             @default(0) @map("pages_processed")
+  ordersProcessed      Int                             @default(0) @map("orders_processed")
+  itemsMapped          Int                             @default(0) @map("items_mapped")
+  itemsUnmapped        Int                             @default(0) @map("items_unmapped")
+  executionId          String?                         @map("execution_id") @db.Uuid
+  heartbeatAt          DateTime?                       @map("heartbeat_at") @db.Timestamptz(3)
+  lastError            String?                         @map("last_error")
+  startedAt            DateTime?                       @map("started_at") @db.Timestamptz(3)
+  completedAt          DateTime?                       @map("completed_at") @db.Timestamptz(3)
+  failedAt             DateTime?                       @map("failed_at") @db.Timestamptz(3)
+  createdAt            DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccount   MarketplaceAccount              @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_order_backfill_runs_marketplace_account_id_fkey")
+  businessAccount      BusinessAccount                 @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_order_backfill_runs_business_account_id_fkey")
+  chunks               MarketplaceOrderBackfillChunk[]
+
+  @@index([marketplaceAccountId, status], map: "marketplace_order_backfill_runs_account_status_idx")
+  @@index([businessAccountId], map: "marketplace_order_backfill_runs_business_account_id_idx")
+  @@map("marketplace_order_backfill_runs")
+}
+
+model MarketplaceOrderBackfillChunk {
+  id              String                          @id @default(uuid()) @db.Uuid
+  runId           String                          @map("run_id") @db.Uuid
+  dateFrom        DateTime                        @map("date_from") @db.Timestamptz(3)
+  dateTo          DateTime                        @map("date_to") @db.Timestamptz(3)
+  status          MarketplaceOrderBackfillStatus  @default(PENDING)
+  nextOffset      Int                             @default(0) @map("next_offset")
+  totalOrders     Int?                            @map("total_orders")
+  attempts        Int                             @default(0)
+  pagesProcessed  Int                             @default(0) @map("pages_processed")
+  ordersProcessed Int                             @default(0) @map("orders_processed")
+  itemsMapped     Int                             @default(0) @map("items_mapped")
+  itemsUnmapped   Int                             @default(0) @map("items_unmapped")
+  partial         Boolean                         @default(false)
+  lastError       String?                         @map("last_error")
+  startedAt       DateTime?                       @map("started_at") @db.Timestamptz(3)
+  completedAt     DateTime?                       @map("completed_at") @db.Timestamptz(3)
+  failedAt        DateTime?                       @map("failed_at") @db.Timestamptz(3)
+  createdAt       DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  run             MarketplaceOrderBackfillRun     @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_order_backfill_chunks_run_id_fkey")
+
+  @@unique([runId, dateFrom], map: "marketplace_order_backfill_chunks_run_date_from_key")
+  @@index([runId, status], map: "marketplace_order_backfill_chunks_run_status_idx")
+  @@map("marketplace_order_backfill_chunks")
 }

@@ -1,6 +1,9 @@
 import { MarketplaceAccount } from '@prisma/client';
 
-import { MarketplaceOrdersResult } from './marketplace-order.types.js';
+import {
+  MarketplaceOrdersPage,
+  MarketplaceOrdersResult,
+} from './marketplace-order.types.js';
 
 export const MARKETPLACE_ORDERS_PROVIDER = Symbol(
   'MARKETPLACE_ORDERS_PROVIDER',
@@ -20,6 +23,9 @@ export interface ListMarketplaceOrdersParams {
 }
 
 export interface MarketplaceOrdersProvider {
+  listOrdersPage(
+    params: ListMarketplaceOrdersParams,
+  ): Promise<MarketplaceOrdersPage>;
   listOrders(
     params: ListMarketplaceOrdersParams,
   ): Promise<MarketplaceOrdersResult>;

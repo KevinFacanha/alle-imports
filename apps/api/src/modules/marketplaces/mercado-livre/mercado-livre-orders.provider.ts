@@ -6,6 +6,7 @@ import {
 } from '../domain/marketplace-orders.provider.js';
 import {
   MarketplaceOrder,
+  MarketplaceOrdersPage,
   MarketplaceOrdersResult,
 } from '../domain/marketplace-order.types.js';
 import { MercadoLivreClient } from './mercado-livre.client.js';
@@ -24,7 +25,6 @@ export class MercadoLivreOrdersProvider implements MarketplaceOrdersProvider {
   ): Promise<MarketplaceOrdersResult> {
     validateParams(params);
 
-    const pageSize = params.limit ?? DEFAULT_PAGE_SIZE;
     let nextOffset = params.offset ?? 0;
     let partial = false;
     let pageCount = 0;
@@ -39,50 +39,69 @@ export class MercadoLivreOrdersProvider implements MarketplaceOrdersProvider {
         );
       }
 
-      const response = await this.client.searchOrders(
-        {
-          seller: params.marketplaceAccount.externalAccountId,
-          dateCreatedFrom: params.dateFrom.toISOString(),
-          dateCreatedTo: params.dateTo.toISOString(),
-          offset: nextOffset,
-          limit: pageSize,
-          sort: params.sort ?? 'date_asc',
-        },
-        params.marketplaceAccount,
-      );
-      const page = response.data;
-      partial ||= response.partial;
+      const page = await this.listOrdersPage({
+        ...params,
+        offset: nextOffset,
+      });
+      partial ||= page.partial;
 
-      if (
-        page.paging.offset !== nextOffset ||
-        visitedResponseOffsets.has(page.paging.offset) ||
-        !Number.isInteger(page.paging.limit) ||
-        page.paging.limit < 1
-      ) {
-        throw new Error(
-          'Mercado Livre returned inconsistent pagination metadata.',
-        );
+      if (visitedResponseOffsets.has(page.offset)) {
+        throw new Error('Mercado Livre returned repeated pagination metadata.');
       }
-      visitedResponseOffsets.add(page.paging.offset);
+      visitedResponseOffsets.add(page.offset);
+      orders.push(...page.orders);
 
-      const mappedOrders = page.results.map(mapMercadoLivreOrder);
-      orders.push(
-        ...mappedOrders.filter(
-          (order) =>
-            order.soldAt >= params.dateFrom && order.soldAt < params.dateTo,
-        ),
-      );
-
-      if (
-        page.paging.offset + page.paging.limit >= page.paging.total
-      ) {
+      if (!page.hasMore || page.nextOffset === null) {
         break;
       }
-
-      nextOffset = page.paging.offset + page.paging.limit;
+      nextOffset = page.nextOffset;
     }
 
     return { orders, partial };
+  }
+
+  async listOrdersPage(
+    params: ListMarketplaceOrdersParams,
+  ): Promise<MarketplaceOrdersPage> {
+    validateParams(params);
+    const offset = params.offset ?? 0;
+    const response = await this.client.searchOrders(
+      {
+        seller: params.marketplaceAccount.externalAccountId,
+        dateCreatedFrom: params.dateFrom.toISOString(),
+        dateCreatedTo: params.dateTo.toISOString(),
+        offset,
+        limit: params.limit ?? DEFAULT_PAGE_SIZE,
+        sort: params.sort ?? 'date_asc',
+      },
+      params.marketplaceAccount,
+    );
+    const page = response.data;
+    if (
+      page.paging.offset !== offset ||
+      !Number.isInteger(page.paging.total) ||
+      page.paging.total < 0 ||
+      !Number.isInteger(page.paging.limit) ||
+      page.paging.limit < 1
+    ) {
+      throw new Error('Mercado Livre returned inconsistent pagination metadata.');
+    }
+
+    const nextOffset = page.paging.offset + page.paging.limit;
+    const hasMore = nextOffset < page.paging.total;
+    return {
+      orders: page.results
+        .map(mapMercadoLivreOrder)
+        .filter(
+          (order) =>
+            order.soldAt >= params.dateFrom && order.soldAt < params.dateTo,
+        ),
+      offset: page.paging.offset,
+      nextOffset: hasMore ? nextOffset : null,
+      total: page.paging.total,
+      partial: response.partial,
+      hasMore,
+    };
   }
 }
 

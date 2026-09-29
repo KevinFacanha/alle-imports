@@ -18,6 +18,7 @@ tsconfig.tsbuildinfo
 apps/api/dist/
 apps/api/dist-test/
 apps/api/.env
+apps/api/.env.test
 apps/api/*.tsbuildinfo
 apps/api/.local-fixtures/gefinance/
 **/gefinance-report*.xlsx
