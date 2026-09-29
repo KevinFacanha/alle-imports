@@ -47,7 +47,7 @@ export class OrdersIngestionError extends Error {
   }
 }
 
-interface PersistenceCounts {
+export interface PersistenceCounts {
   created: number;
   updated: number;
   itemsCreated: number;
@@ -104,7 +104,7 @@ export class OrdersIngestionService {
 
     for (const order of result.orders) {
       const counts = await this.database.$transaction((transaction) =>
-        persistOrder(
+        persistMarketplaceOrder(
           transaction,
           marketplaceAccount.id,
           order,
@@ -124,7 +124,7 @@ export class OrdersIngestionService {
   }
 }
 
-async function persistOrder(
+export async function persistMarketplaceOrder(
   transaction: Prisma.TransactionClient,
   marketplaceAccountId: string,
   order: MarketplaceOrder,
@@ -144,9 +144,13 @@ async function persistOrder(
       order.normalizedStatus as PrismaMarketplaceOrderStatus,
     rawStatus: order.rawStatus,
     soldAt: order.soldAt,
+    closedAt: order.closedAt,
+    lastUpdatedAt: order.lastUpdatedAt,
     cancelledAt: order.cancelledAt,
     currency: order.currency,
     grossAmount: order.grossAmount,
+    paidAmount: order.paidAmount,
+    refundedAmount: order.refundedAmount,
   };
   const persistedOrder = await transaction.marketplaceOrder.upsert({
     where: orderIdentity,
@@ -178,14 +182,15 @@ async function persistOrder(
         items: {
           where: { externalSellableId: item.externalSellableId },
           take: 1,
-          select: { id: true, productId: true },
+          select: { id: true },
         },
       },
     });
     const mappedListingItem = listing?.items[0] ?? null;
     const itemIdentity = {
-      marketplaceOrderId_externalSellableId: {
+      marketplaceOrderId_externalListingId_externalSellableId: {
         marketplaceOrderId: persistedOrder.id,
+        externalListingId: item.externalListingId,
         externalSellableId: item.externalSellableId,
       },
     };
@@ -194,20 +199,21 @@ async function persistOrder(
       select: { id: true },
     });
     const itemData = {
-      externalListingId: item.externalListingId,
+      userProductId: item.userProductId,
+      catalogProductId: item.catalogProductId,
       sellerSku: item.sellerSku,
       title: item.title,
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       grossAmount: item.grossAmount,
       marketplaceListingItemId: mappedListingItem?.id ?? null,
-      productId: mappedListingItem?.productId ?? null,
     };
 
     await transaction.marketplaceOrderItem.upsert({
       where: itemIdentity,
       create: {
         marketplaceOrderId: persistedOrder.id,
+        externalListingId: item.externalListingId,
         externalSellableId: item.externalSellableId,
         ...itemData,
       },

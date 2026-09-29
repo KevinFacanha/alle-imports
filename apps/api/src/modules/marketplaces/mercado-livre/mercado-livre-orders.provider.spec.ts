@@ -51,13 +51,19 @@ describe('MercadoLivreOrdersProvider', () => {
       rawStatus: 'paid',
       normalizedStatus: MarketplaceOrderStatus.Paid,
       soldAt: new Date('2026-09-01T12:30:00.000Z'),
+      closedAt: null,
+      lastUpdatedAt: null,
       cancelledAt: null,
       currency: 'BRL',
       grossAmount: new Prisma.Decimal('39.8'),
+      paidAmount: null,
+      refundedAmount: null,
       items: [
         {
           externalListingId: 'MLB1000',
           externalSellableId: 'MLB1000',
+          userProductId: null,
+          catalogProductId: null,
           sellerSku: null,
           title: 'Produto simples',
           quantity: 2,
@@ -94,6 +100,8 @@ describe('MercadoLivreOrdersProvider', () => {
     assert.deepEqual(result.orders[0]?.items[0], {
       externalListingId: 'MLB2000',
       externalSellableId: '987654',
+      userProductId: null,
+      catalogProductId: null,
       sellerSku: 'SKU-AZUL-M',
       title: 'Camiseta azul',
       quantity: 2,
@@ -197,6 +205,68 @@ describe('MercadoLivreOrdersProvider', () => {
       new Headers(calls[0]?.init.headers).get('authorization'),
       `Bearer ${ACCESS_TOKEN}`,
     );
+  });
+
+  it('returns one page with explicit pagination metadata', async () => {
+    const { provider, calls } = makeProvider([
+      jsonResponse(makeSearchResponse([makeOrder({ id: 2 })], 50, 50, 120)),
+    ]);
+
+    const result = await provider.listOrdersPage({
+      ...makeListParams(),
+      offset: 50,
+      limit: 50,
+    });
+
+    assert.deepEqual(
+      {
+        offset: result.offset,
+        nextOffset: result.nextOffset,
+        total: result.total,
+        partial: result.partial,
+        hasMore: result.hasMore,
+      },
+      { offset: 50, nextOffset: 100, total: 120, partial: false, hasMore: true },
+    );
+    assert.equal(result.orders[0]?.externalOrderId, '2');
+    assert.equal(calls.length, 1);
+  });
+
+  it('preserves historical dates, amounts and item product references', async () => {
+    const { provider } = makeProvider([
+      jsonResponse(
+        makeSearchResponse([
+          makeOrder({
+            date_closed: '2026-09-01T13:00:00.000Z',
+            date_last_updated: '2026-09-01T14:00:00.000Z',
+            paid_amount: 35.5,
+            payments: [
+              { transaction_amount_refunded: 2.25 },
+              { transaction_amount_refunded: 1.25 },
+            ],
+            order_items: [
+              {
+                ...makeOrder().order_items[0],
+                item: {
+                  ...makeOrder().order_items[0]!.item,
+                  user_product_id: 'UP-1',
+                  catalog_product_id: 'CAT-1',
+                },
+              },
+            ],
+          }),
+        ]),
+      ),
+    ]);
+
+    const order = (await provider.listOrdersPage(makeListParams())).orders[0]!;
+
+    assert.deepEqual(order.closedAt, new Date('2026-09-01T13:00:00.000Z'));
+    assert.deepEqual(order.lastUpdatedAt, new Date('2026-09-01T14:00:00.000Z'));
+    assert.equal(order.paidAmount?.toString(), '35.5');
+    assert.equal(order.refundedAmount?.toString(), '3.5');
+    assert.equal(order.items[0]?.userProductId, 'UP-1');
+    assert.equal(order.items[0]?.catalogProductId, 'CAT-1');
   });
 
   it('keeps only orders inside the requested half-open interval', async () => {

@@ -8,15 +8,15 @@ import {
   MercadoLivreCatalogItem,
   MercadoLivreCatalogVariation,
 } from './mercado-livre-catalog.types.js';
+import {
+  MERCADO_LIVRE_ACCOUNT_EXTERNAL_IDS,
+  MercadoLivreAccountAlias,
+} from './mercado-livre-accounts.js';
 
-const ACCOUNT_EXTERNAL_IDS = {
-  c1: '740458955',
-  c2: '1196767962',
-} as const;
 const BULK_SIZE = 20;
 const MAX_SCAN_PAGES = 10_000;
 
-export type CatalogAccountAlias = keyof typeof ACCOUNT_EXTERNAL_IDS;
+export type CatalogAccountAlias = MercadoLivreAccountAlias;
 
 export interface CatalogSyncProgress {
   account: CatalogAccountAlias;
@@ -235,7 +235,7 @@ export class MercadoLivreCatalogSyncService {
   private async loadAccount(
     alias: CatalogAccountAlias,
   ): Promise<MarketplaceAccount> {
-    const externalAccountId = ACCOUNT_EXTERNAL_IDS[alias];
+    const externalAccountId = MERCADO_LIVRE_ACCOUNT_EXTERNAL_IDS[alias];
     const account = await this.database.marketplaceAccount.findUnique({
       where: {
         marketplace_externalAccountId: {

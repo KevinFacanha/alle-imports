@@ -3,6 +3,8 @@ import { after, before, describe, it } from 'node:test';
 
 import { DatabaseService } from './database.service.js';
 
+process.env.DATABASE_SAFETY_MODE = 'test';
+
 describe('DatabaseService integration', () => {
   const database = new DatabaseService();
 

@@ -108,7 +108,7 @@ describe('OrdersIngestionService', () => {
     assert.equal(item?.grossAmount, '0.37');
   });
 
-  it('maps a listing item from the same account and inherits its productId', async () => {
+  it('maps a listing item from the same account without filling productId', async () => {
     const database = new InMemoryDatabase([makeAccount()]);
     database.addCatalogItem({
       marketplaceAccountId: ACCOUNT_ID,
@@ -126,7 +126,7 @@ describe('OrdersIngestionService', () => {
 
     assert.equal(summary.unmappedItems, 0);
     assert.equal(item?.marketplaceListingItemId, 'listing-item-1');
-    assert.equal(item?.productId, 'product-1');
+    assert.equal(item?.productId, null);
   });
 
   it('keeps identical external identities isolated between two accounts', async () => {
@@ -284,8 +284,9 @@ interface ListingArgs {
 
 interface UniqueItemArgs {
   where: {
-    marketplaceOrderId_externalSellableId: {
+    marketplaceOrderId_externalListingId_externalSellableId: {
       marketplaceOrderId: string;
+      externalListingId: string;
       externalSellableId: string;
     };
   };
@@ -294,6 +295,7 @@ interface UniqueItemArgs {
 interface UpsertItemArgs extends UniqueItemArgs {
   create: Record<string, unknown> & {
     marketplaceOrderId: string;
+    externalListingId: string;
     externalSellableId: string;
   };
   update: Record<string, unknown>;
@@ -394,12 +396,14 @@ class InMemoryDatabase {
     },
     marketplaceOrderItem: {
       findUnique: async (args: UniqueItemArgs) => {
-        const identity = args.where.marketplaceOrderId_externalSellableId;
+        const identity =
+          args.where.marketplaceOrderId_externalListingId_externalSellableId;
         const item = this.items.get(itemKey(identity));
         return item ? { id: item.id } : null;
       },
       upsert: async (args: UpsertItemArgs) => {
-        const identity = args.where.marketplaceOrderId_externalSellableId;
+        const identity =
+          args.where.marketplaceOrderId_externalListingId_externalSellableId;
         if (identity.externalSellableId === this.failOnSellableId) {
           throw new Error('simulated item persistence failure');
         }
@@ -411,7 +415,9 @@ class InMemoryDatabase {
           ...existing,
           ...source,
           id,
+          productId: existing?.productId ?? null,
           marketplaceOrderId: identity.marketplaceOrderId,
+          externalListingId: identity.externalListingId,
           externalSellableId: identity.externalSellableId,
         }) as StoredItem;
         this.items.set(key, item);
@@ -436,6 +442,21 @@ class OrdersProviderFake implements MarketplaceOrdersProvider {
     this.calls.push(params);
     await Promise.resolve();
     return { orders: this.orders, partial: this.partial };
+  }
+
+  async listOrdersPage(
+    params: Parameters<MarketplaceOrdersProvider['listOrdersPage']>[0],
+  ) {
+    this.calls.push(params);
+    await Promise.resolve();
+    return {
+      orders: this.orders,
+      offset: params.offset ?? 0,
+      nextOffset: null,
+      total: this.orders.length,
+      partial: this.partial,
+      hasMore: false,
+    };
   }
 }
 
@@ -471,9 +492,13 @@ function makeOrder(overrides: Partial<MarketplaceOrder> = {}): MarketplaceOrder 
     rawStatus: 'paid',
     normalizedStatus: MarketplaceOrderStatus.Paid,
     soldAt: new Date('2026-09-01T12:00:00.000Z'),
+    closedAt: new Date('2026-09-01T13:00:00.000Z'),
+    lastUpdatedAt: new Date('2026-09-01T14:00:00.000Z'),
     cancelledAt: null,
     currency: 'BRL',
     grossAmount: money('39.80'),
+    paidAmount: money('39.80'),
+    refundedAmount: money('0'),
     items: [makeItem()],
     ...overrides,
   };
@@ -485,6 +510,8 @@ function makeItem(
   return {
     externalListingId: 'MLB1000',
     externalSellableId: 'MLB1000',
+    userProductId: null,
+    catalogProductId: null,
     sellerSku: null,
     title: 'Produto simples',
     quantity: 2,
@@ -515,9 +542,10 @@ function orderKey(identity: {
 
 function itemKey(identity: {
   marketplaceOrderId: string;
+  externalListingId: string;
   externalSellableId: string;
 }): string {
-  return `${identity.marketplaceOrderId}|${identity.externalSellableId}`;
+  return `${identity.marketplaceOrderId}|${identity.externalListingId}|${identity.externalSellableId}`;
 }
 
 function catalogKey(identity: {
@@ -532,7 +560,7 @@ function normalizeMoneyFields(
   record: Record<string, unknown>,
 ): Record<string, unknown> {
   const normalized = { ...record };
-  for (const field of ['grossAmount', 'unitPrice']) {
+  for (const field of ['grossAmount', 'unitPrice', 'paidAmount', 'refundedAmount']) {
     if (normalized[field] instanceof Prisma.Decimal) {
       normalized[field] = normalized[field].toString();
     }

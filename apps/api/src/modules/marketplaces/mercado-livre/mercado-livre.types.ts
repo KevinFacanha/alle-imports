@@ -2,6 +2,8 @@ export interface MercadoLivreOrderItem {
   item: {
     id: string;
     variation_id?: string | number | null;
+    user_product_id?: string | number | null;
+    catalog_product_id?: string | number | null;
     seller_sku?: string | null;
     title?: string | null;
   };
@@ -20,8 +22,14 @@ export interface MercadoLivreOrder {
   pack_id?: string | number | null;
   status: string;
   date_created: string;
+  date_closed?: string | null;
+  date_last_updated?: string | null;
   currency_id: string;
   total_amount: number;
+  paid_amount?: number | null;
+  payments?: Array<{
+    transaction_amount_refunded?: number | null;
+  }>;
   cancel_detail?: {
     date?: string | null;
   } | null;

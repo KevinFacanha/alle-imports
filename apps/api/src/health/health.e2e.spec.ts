@@ -20,6 +20,7 @@ describe('GET /api/v1/health', () => {
     process.env.WEB_ORIGIN = 'http://localhost:3000';
     process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
     process.env.DIRECT_URL = 'postgresql://localhost:5432/test';
+    process.env.ALLOW_DISPOSABLE_TEST_DATABASE = 'true';
     process.env.OLIST_CLIENT_ID = 'olist-e2e-client-id';
     process.env.OLIST_CLIENT_SECRET = 'olist-e2e-client-secret';
     process.env.OLIST_REDIRECT_URI =
