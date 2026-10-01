@@ -8,6 +8,7 @@ import { DailySellerMetricsPersistenceService } from './application/daily-seller
 import { DailySellerMetricsQueryService } from './application/daily-seller-metrics-query.service.js';
 import { GeFinanceImportService } from './application/gefinance-import.service.js';
 import { MercadoLivreMetricsReconciliationService } from './application/mercado-livre-metrics-reconciliation.service.js';
+import { ProductSalesAbcService } from './application/product-sales-abc.service.js';
 import { SellerBiMetricResolver } from './application/seller-bi-metric.resolver.js';
 import {
   createGeFinanceProvider,
@@ -26,6 +27,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     DailySellerMetricsQueryService,
     GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
+    ProductSalesAbcService,
     SellerBiMetricResolver,
     SellerMetricsReconciliationService,
     {
@@ -39,6 +41,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     DailySellerMetricsPersistenceService,
     GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
+    ProductSalesAbcService,
     SellerBiMetricResolver,
     SellerMetricsReconciliationService,
   ],
