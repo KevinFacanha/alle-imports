@@ -28,6 +28,7 @@ async function main(): Promise<void> {
       .get(ProductMaterializationService)
       .execute({
         planContents,
+        expectedSha256: args.expectedSha256,
         execute: args.execute,
         candidateIds: args.candidateIds,
       });

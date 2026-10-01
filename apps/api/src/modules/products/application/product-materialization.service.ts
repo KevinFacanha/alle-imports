@@ -2,26 +2,6 @@ import { createHash } from 'node:crypto';
 
 import { ProductIdentityProvider } from '@prisma/client';
 
-export const APPROVED_PRODUCT_MATERIALIZATION = {
-  sha256: 'dfb0e0b78374aa3b9345f7d6838fbff3e5fde7a5157cc45399a44f209d1ff499',
-  products: 110,
-  listingItems: 116,
-  mercadoLivreIdentities: 116,
-  olistIdentities: 116,
-  externalIdentities: 232,
-  bothAccounts: 6,
-} as const;
-
-export interface ProductMaterializationApproval {
-  sha256: string;
-  products: number;
-  listingItems: number;
-  mercadoLivreIdentities: number;
-  olistIdentities: number;
-  externalIdentities: number;
-  bothAccounts: number;
-}
-
 export interface ProductMaterializationExecution {
   mode: 'DRY_RUN' | 'EXECUTE';
   planSha256: string;
@@ -35,6 +15,7 @@ export interface ProductMaterializationExecution {
     bothAccounts: number;
   };
   productsToCreate: number;
+  productsToReuse: number;
   productsAlreadyMaterialized: number;
   listingLinksToCreate: number;
   listingLinksAlreadyCorrect: number;
@@ -106,6 +87,8 @@ export interface ProductMaterializationPlan {
     listingItemsHigh: number;
     productCandidates: number;
     bothC1AndC2: number;
+    productsToCreate: number;
+    productsToReuse: number;
     ready: number;
     blocked: number;
     plannedWritesIfLaterAuthorized: {
@@ -121,6 +104,8 @@ export interface ProductMaterializationPlan {
 
 export interface ProductMaterializationCandidate {
   productCandidateId: string;
+  classification: 'HIGH' | 'PROMOTABLE_TO_HIGH';
+  action: 'CREATE_PRODUCT_AND_LINK' | 'REUSE_HIGH_PRODUCT_AND_LINK';
   groupKey: string;
   evidenceHigh: string[];
   accounts: string[];
@@ -130,7 +115,9 @@ export interface ProductMaterializationCandidate {
   observedSkus: string[];
   proposedProductSku: string;
   proposedProductName: string;
+  proposedProductId: string | null;
   listingItems: ProductMaterializationListingItem[];
+  plannedIdentities: PlannedExternalIdentity[];
   status: string;
   blockers: unknown[];
 }
@@ -158,6 +145,8 @@ export interface PlannedExternalIdentity {
   externalListingId: string;
   externalVariationId: string | null;
   marketplaceListingItemId: string | null;
+  action: 'CREATE' | 'ALREADY_CORRECT';
+  existingIdentityId: string | null;
 }
 
 export interface ProductMaterializationAnalysis {
@@ -177,32 +166,32 @@ export class ProductMaterializationError extends Error {
 }
 
 export class ProductMaterializationService {
-  constructor(
-    private readonly store: ProductMaterializationStore,
-    private readonly approval: ProductMaterializationApproval =
-      APPROVED_PRODUCT_MATERIALIZATION,
-  ) {}
+  constructor(private readonly store: ProductMaterializationStore) {}
 
   async execute(input: {
     planContents: Buffer;
+    expectedSha256: string;
     execute?: boolean;
     candidateIds?: string[];
   }): Promise<ProductMaterializationExecution> {
     const planSha256 = createHash('sha256')
       .update(input.planContents)
       .digest('hex');
-    if (planSha256 !== this.approval.sha256) {
+    if (planSha256 !== input.expectedSha256) {
       throw new ProductMaterializationError(
-        `Plan SHA-256 mismatch: expected ${this.approval.sha256}, received ${planSha256}.`,
+        `Plan SHA-256 mismatch: expected ${input.expectedSha256}, received ${planSha256}.`,
       );
     }
 
-    const approvedPlan = parseAndValidatePlan(input.planContents, this.approval);
+    const approvedPlan = parseAndValidatePlan(input.planContents);
     const plan = selectCandidates(approvedPlan, input.candidateIds ?? []);
     if (input.execute !== true) {
       const state = await this.store.loadState(plan);
       return analyzeMaterialization(plan, state, planSha256, true).execution;
     }
+
+    const preflightState = await this.store.loadState(plan);
+    analyzeMaterialization(plan, preflightState, planSha256, false);
 
     const candidateExecutions: ProductMaterializationExecution[] = [];
     for (const candidate of plan.candidates) {
@@ -265,6 +254,13 @@ function planForCandidates(
     (total, candidate) => total + candidate.listingItems.length,
     0,
   );
+  const identities = candidates.flatMap(({ plannedIdentities }) =>
+    plannedIdentities,
+  );
+  const productsToCreate = candidates.filter(
+    ({ action }) => action === 'CREATE_PRODUCT_AND_LINK',
+  ).length;
+  const productsToReuse = candidates.length - productsToCreate;
   const bothAccounts = candidates.filter(
     ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
   ).length;
@@ -274,14 +270,25 @@ function planForCandidates(
       listingItemsHigh: listingItems,
       productCandidates: candidates.length,
       bothC1AndC2: bothAccounts,
+      productsToCreate,
+      productsToReuse,
       ready: candidates.length,
       blocked: 0,
       plannedWritesIfLaterAuthorized: {
-        Product: candidates.length,
+        Product: productsToCreate,
         MarketplaceListingItemProductLinks: listingItems,
-        ProductExternalIdentity: listingItems * 2,
-        MercadoLivreIdentities: listingItems,
-        OlistIdentities: listingItems,
+        ProductExternalIdentity: identities.filter(
+          ({ action }) => action === 'CREATE',
+        ).length,
+        MercadoLivreIdentities: identities.filter(
+          ({ action, provider }) =>
+            action === 'CREATE' &&
+            provider === ProductIdentityProvider.MERCADO_LIVRE,
+        ).length,
+        OlistIdentities: identities.filter(
+          ({ action, provider }) =>
+            action === 'CREATE' && provider === ProductIdentityProvider.OLIST,
+        ).length,
       },
     },
     candidates,
@@ -296,6 +303,7 @@ function combineExecutions(
   const total = (
     key:
       | 'productsToCreate'
+      | 'productsToReuse'
       | 'productsAlreadyMaterialized'
       | 'listingLinksToCreate'
       | 'listingLinksAlreadyCorrect'
@@ -323,6 +331,7 @@ function combineExecutions(
       bothAccounts: plan.summary.bothC1AndC2,
     },
     productsToCreate: total('productsToCreate'),
+    productsToReuse: total('productsToReuse'),
     productsAlreadyMaterialized: total('productsAlreadyMaterialized'),
     listingLinksToCreate: total('listingLinksToCreate'),
     listingLinksAlreadyCorrect: total('listingLinksAlreadyCorrect'),
@@ -339,10 +348,7 @@ function combineExecutions(
   };
 }
 
-function parseAndValidatePlan(
-  contents: Buffer,
-  approval: ProductMaterializationApproval,
-): ProductMaterializationPlan {
+function parseAndValidatePlan(contents: Buffer): ProductMaterializationPlan {
   let value: unknown;
   try {
     value = JSON.parse(contents.toString('utf8'));
@@ -350,18 +356,38 @@ function parseAndValidatePlan(
     throw new ProductMaterializationError('Plan is not valid JSON.');
   }
   if (!isRecord(value)) fail('Plan root must be an object.');
+  const diagnostic = text(value, 'diagnostic');
+  const incremental = diagnostic === 'READ_ONLY_INCREMENTAL_MATERIALIZATION_PLAN';
+  if (!incremental && diagnostic !== 'READ_ONLY_MATERIALIZATION_PLAN') {
+    fail('Plan diagnostic is not an approved materialization plan type.');
+  }
+  if (incremental) validateIncrementalSource(value);
+
   const summary = record(value, 'summary');
   const writes = record(summary, 'plannedWritesIfLaterAuthorized');
   const candidates = array(value, 'candidates').map((candidate, index) =>
-    parseCandidate(candidate, index),
+    parseCandidate(candidate, index, incremental),
   );
+  const bothC1AndC2 = candidates.filter(
+    ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
+  ).length;
+  const productsToCreate = incremental
+    ? integer(summary, 'productsToCreate')
+    : candidates.length;
+  const productsToReuse = incremental
+    ? integer(summary, 'productsToReuse')
+    : 0;
 
   const plan: ProductMaterializationPlan = {
-    diagnostic: text(value, 'diagnostic'),
+    diagnostic,
     summary: {
       listingItemsHigh: integer(summary, 'listingItemsHigh'),
       productCandidates: integer(summary, 'productCandidates'),
-      bothC1AndC2: integer(summary, 'bothC1AndC2'),
+      bothC1AndC2: incremental
+        ? bothC1AndC2
+        : integer(summary, 'bothC1AndC2'),
+      productsToCreate,
+      productsToReuse,
       ready: integer(summary, 'ready'),
       blocked: integer(summary, 'blocked'),
       plannedWritesIfLaterAuthorized: {
@@ -378,17 +404,39 @@ function parseAndValidatePlan(
     candidates,
   };
 
-  if (plan.diagnostic !== 'READ_ONLY_MATERIALIZATION_PLAN') {
-    fail('Plan diagnostic is not READ_ONLY_MATERIALIZATION_PLAN.');
-  }
-  validateApprovedCounts(plan, approval);
+  validateDeclaredCounts(plan);
   validateCandidateUniqueness(plan);
   return plan;
+}
+
+function validateIncrementalSource(value: Record<string, unknown>): void {
+  if (integer(value, 'version') !== 1) fail('Incremental plan version must be 1.');
+  const sourceAudit = record(value, 'sourceAudit');
+  if (text(sourceAudit, 'classification') !== 'PROMOTABLE_TO_HIGH') {
+    fail('Incremental plan source classification is not PROMOTABLE_TO_HIGH.');
+  }
+  text(sourceAudit, 'repositoryCommit');
+  text(sourceAudit, 'checkpoint');
+  const window = record(sourceAudit, 'window');
+  text(window, 'from');
+  text(window, 'to');
+  if (integer(window, 'days') === 0) fail('Incremental audit window is empty.');
+  const rule = record(sourceAudit, 'rule');
+  if (
+    boolean(rule, 'accountScopedUnlinkedSellerSkuUnique') !== true ||
+    boolean(rule, 'exactUniqueOlistCatalogMatch') !== true ||
+    integer(rule, 'minimumIndependentPaidOrders') < 2 ||
+    boolean(rule, 'sellerSkuConsistentInAllPaidOrders') !== true ||
+    integer(rule, 'divergentEvidenceAllowed') !== 0
+  ) {
+    fail('Incremental plan source rule is not approved.');
+  }
 }
 
 function parseCandidate(
   value: unknown,
   index: number,
+  incremental: boolean,
 ): ProductMaterializationCandidate {
   if (!isRecord(value)) fail(`Candidate ${index + 1} must be an object.`);
   const listingItems = array(value, 'listingItems').map((item, itemIndex) =>
@@ -403,8 +451,13 @@ function parseCandidate(
       return [account, ids as string[]];
     }),
   );
+  const proposedProductSku = text(value, 'proposedProductSku');
   const candidate: ProductMaterializationCandidate = {
     productCandidateId: text(value, 'productCandidateId'),
+    classification: incremental ? 'PROMOTABLE_TO_HIGH' : 'HIGH',
+    action: incremental
+      ? materializationAction(value, 'action')
+      : 'CREATE_PRODUCT_AND_LINK',
     groupKey: text(value, 'groupKey'),
     evidenceHigh: stringArray(value, 'evidenceHigh'),
     accounts: stringArray(value, 'accounts'),
@@ -412,14 +465,105 @@ function parseCandidate(
     olistProductIds,
     gtin: nullableText(value, 'gtin'),
     observedSkus: stringArray(value, 'observedSkus'),
-    proposedProductSku: text(value, 'proposedProductSku'),
+    proposedProductSku,
     proposedProductName: text(value, 'proposedProductName'),
+    proposedProductId: incremental
+      ? nullableUuid(value, 'proposedProductId')
+      : null,
     listingItems,
+    plannedIdentities: [],
     status: text(value, 'status'),
     blockers: array(value, 'blockers'),
   };
+  candidate.plannedIdentities = incremental
+    ? array(value, 'plannedIdentities').map((identity, identityIndex) =>
+        parsePlannedIdentity(
+          identity,
+          proposedProductSku,
+          index,
+          identityIndex,
+        ),
+      )
+    : listingItems.flatMap((item) =>
+        derivePlannedIdentities(proposedProductSku, item),
+      );
+  if (incremental) validateIncrementalEvidence(value, candidate);
   validateCandidate(candidate);
   return candidate;
+}
+
+function parsePlannedIdentity(
+  value: unknown,
+  candidateSku: string,
+  candidateIndex: number,
+  identityIndex: number,
+): PlannedExternalIdentity {
+  if (!isRecord(value)) {
+    fail(
+      `Planned identity ${identityIndex + 1} of candidate ${candidateIndex + 1} must be an object.`,
+    );
+  }
+  const providerValue = text(value, 'provider');
+  if (
+    providerValue !== ProductIdentityProvider.MERCADO_LIVRE &&
+    providerValue !== ProductIdentityProvider.OLIST
+  ) {
+    fail(`Candidate ${candidateIndex + 1} has an invalid identity provider.`);
+  }
+  const actionValue = text(value, 'action');
+  if (actionValue !== 'CREATE' && actionValue !== 'ALREADY_CORRECT') {
+    fail(`Candidate ${candidateIndex + 1} has an invalid identity action.`);
+  }
+  return {
+    candidateSku,
+    businessAccountId: uuid(value, 'businessAccountId'),
+    provider: providerValue,
+    sellerSku: nullableText(value, 'sellerSku'),
+    externalListingId: text(value, 'externalListingId'),
+    externalVariationId: nullableText(value, 'externalVariationId'),
+    marketplaceListingItemId: nullableUuid(value, 'marketplaceListingItemId'),
+    action: actionValue,
+    existingIdentityId: optionalNullableUuid(value, 'existingIdentityId'),
+  };
+}
+
+function validateIncrementalEvidence(
+  value: Record<string, unknown>,
+  candidate: ProductMaterializationCandidate,
+): void {
+  if (
+    text(value, 'classification') !== 'PROMOTABLE_TO_HIGH' ||
+    text(value, 'identityBasis') !==
+      'EXACT_ACCOUNT_SCOPED_OLIST_MATCH_CORROBORATED_BY_MULTIPLE_PAID_ORDERS'
+  ) {
+    fail(`${candidate.productCandidateId} has an unapproved classification basis.`);
+  }
+  const requiredEvidence = new Set([
+    'OLIST_SKU_EXACT_UNIQUE',
+    'PAID_ORDER_SELLER_SKU_CORROBORATION',
+  ]);
+  if (
+    candidate.evidenceHigh.length !== requiredEvidence.size ||
+    candidate.evidenceHigh.some((evidence) => !requiredEvidence.has(evidence)) ||
+    candidate.listingItems.some(
+      ({ evidence }) =>
+        evidence !== 'OLIST_SKU_EXACT_UNIQUE_PLUS_MULTIPLE_PAID_ORDERS',
+    )
+  ) {
+    fail(`${candidate.productCandidateId} contains unapproved evidence.`);
+  }
+  const audit = record(value, 'auditEvidence');
+  if (
+    integer(audit, 'exactOlistMatchesInAccount') !== 1 ||
+    integer(audit, 'unlinkedListingItemsWithSkuInAccount') !== 1 ||
+    integer(audit, 'paidOrderCount') < 2 ||
+    integer(audit, 'paidUnits') < 1 ||
+    stringArray(audit, 'paidOrderIds').length < 2 ||
+    boolean(audit, 'sellerSkuConsistentInAllPaidOrders') !== true ||
+    integer(audit, 'divergentEvidenceCount') !== 0
+  ) {
+    fail(`${candidate.productCandidateId} has insufficient audit evidence.`);
+  }
 }
 
 function parseListingItem(
@@ -448,28 +592,42 @@ function parseListingItem(
   };
 }
 
-function validateApprovedCounts(
-  plan: ProductMaterializationPlan,
-  approval: ProductMaterializationApproval,
-): void {
+function validateDeclaredCounts(plan: ProductMaterializationPlan): void {
   const writes = plan.summary.plannedWritesIfLaterAuthorized;
-  const actualListingItems = plan.candidates.reduce(
-    (total, candidate) => total + candidate.listingItems.length,
-    0,
+  const identities = plan.candidates.flatMap(({ plannedIdentities }) =>
+    plannedIdentities,
   );
-  const actualBothAccounts = plan.candidates.filter(
-    ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
-  ).length;
   const actual = {
-    products: plan.candidates.length,
-    listingItems: actualListingItems,
-    mercadoLivreIdentities: actualListingItems,
-    olistIdentities: actualListingItems,
-    externalIdentities: actualListingItems * 2,
-    bothAccounts: actualBothAccounts,
+    productCandidates: plan.candidates.length,
+    productsToCreate: plan.candidates.filter(
+      ({ action }) => action === 'CREATE_PRODUCT_AND_LINK',
+    ).length,
+    productsToReuse: plan.candidates.filter(
+      ({ action }) => action === 'REUSE_HIGH_PRODUCT_AND_LINK',
+    ).length,
+    listingItems: plan.candidates.reduce(
+      (total, candidate) => total + candidate.listingItems.length,
+      0,
+    ),
+    mercadoLivreIdentities: identities.filter(
+      ({ action, provider }) =>
+        action === 'CREATE' &&
+        provider === ProductIdentityProvider.MERCADO_LIVRE,
+    ).length,
+    olistIdentities: identities.filter(
+      ({ action, provider }) =>
+        action === 'CREATE' && provider === ProductIdentityProvider.OLIST,
+    ).length,
+    externalIdentities: identities.filter(({ action }) => action === 'CREATE')
+      .length,
+    bothAccounts: plan.candidates.filter(
+      ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
+    ).length,
   };
   const declared = {
-    products: plan.summary.productCandidates,
+    productCandidates: plan.summary.productCandidates,
+    productsToCreate: plan.summary.productsToCreate,
+    productsToReuse: plan.summary.productsToReuse,
     listingItems: plan.summary.listingItemsHigh,
     mercadoLivreIdentities: writes.MercadoLivreIdentities,
     olistIdentities: writes.OlistIdentities,
@@ -477,19 +635,19 @@ function validateApprovedCounts(
     bothAccounts: plan.summary.bothC1AndC2,
   };
   for (const key of Object.keys(actual) as Array<keyof typeof actual>) {
-    if (actual[key] !== approval[key] || declared[key] !== approval[key]) {
+    if (actual[key] !== declared[key]) {
       fail(
-        `Approved count mismatch for ${key}: expected ${approval[key]}, declared ${declared[key]}, found ${actual[key]}.`,
+        `Declared count mismatch for ${key}: declared ${declared[key]}, found ${actual[key]}.`,
       );
     }
   }
   if (
-    writes.Product !== approval.products ||
-    writes.MarketplaceListingItemProductLinks !== approval.listingItems ||
-    plan.summary.ready !== approval.products ||
+    writes.Product !== actual.productsToCreate ||
+    writes.MarketplaceListingItemProductLinks !== actual.listingItems ||
+    plan.summary.ready !== actual.productCandidates ||
     plan.summary.blocked !== 0
   ) {
-    fail('Plan write totals or READY/BLOCKED totals differ from approval.');
+    fail('Plan write totals or READY/BLOCKED totals are inconsistent.');
   }
 }
 
@@ -510,38 +668,23 @@ function validateCandidate(candidate: ProductMaterializationCandidate): void {
   ) {
     fail(`${candidate.productCandidateId} has inconsistent accounts.`);
   }
-  if (
-    candidate.evidenceHigh.length === 0 ||
-    candidate.evidenceHigh.some(
-      (evidence) => evidence !== 'ORDER_PRODUCT_ID' && evidence !== 'GTIN_UNIQUE',
-    ) ||
-    candidate.listingItems.some(
-      ({ evidence }) =>
-        evidence !== 'ORDER_PRODUCT_ID' && evidence !== 'GTIN_UNIQUE',
-    )
-  ) {
-    fail(`${candidate.productCandidateId} contains unapproved evidence.`);
-  }
 
-  if (candidate.gtin !== null) {
-    const expectedSku = `PRD-GTIN-${candidate.gtin}`;
+  if (candidate.classification === 'HIGH') {
     if (
-      !/^\d{8,14}$/.test(candidate.gtin) ||
-      candidate.proposedProductSku !== expectedSku ||
-      candidate.groupKey !== `GTIN:${candidate.gtin}`
+      candidate.evidenceHigh.length === 0 ||
+      candidate.evidenceHigh.some(
+        (evidence) => evidence !== 'ORDER_PRODUCT_ID' && evidence !== 'GTIN_UNIQUE',
+      ) ||
+      candidate.listingItems.some(
+        ({ evidence }) =>
+          evidence !== 'ORDER_PRODUCT_ID' && evidence !== 'GTIN_UNIQUE',
+      )
     ) {
-      fail(`${candidate.productCandidateId} has an invalid GTIN canonical key.`);
+      fail(`${candidate.productCandidateId} contains unapproved evidence.`);
     }
+    validateHistoricalCanonicalKey(candidate);
   } else {
-    const [first] = candidate.listingItems;
-    const expectedSku = `PRD-OLIST-${first!.account}-${first!.olistProductId}`;
-    if (
-      candidate.listingItems.length !== 1 ||
-      candidate.proposedProductSku !== expectedSku ||
-      candidate.groupKey !== `${first!.account}:OLIST:${first!.olistProductId}`
-    ) {
-      fail(`${candidate.productCandidateId} has an invalid Olist canonical key.`);
-    }
+    validateIncrementalCanonicalKey(candidate);
   }
 
   for (const item of candidate.listingItems) {
@@ -553,12 +696,109 @@ function validateCandidate(candidate: ProductMaterializationCandidate): void {
     ) {
       fail(`${candidate.productCandidateId} has an inconsistent ML sellable.`);
     }
-    if (
-      !candidate.olistProductIds[item.account]?.includes(item.olistProductId)
-    ) {
+    if (!candidate.olistProductIds[item.account]?.includes(item.olistProductId)) {
       fail(`${candidate.productCandidateId} has an inconsistent Olist identity.`);
     }
   }
+  validatePlannedIdentities(candidate);
+}
+
+function validateHistoricalCanonicalKey(
+  candidate: ProductMaterializationCandidate,
+): void {
+  if (candidate.gtin !== null) {
+    const expectedSku = `PRD-GTIN-${candidate.gtin}`;
+    if (
+      !/^\d{8,14}$/.test(candidate.gtin) ||
+      candidate.proposedProductSku !== expectedSku ||
+      candidate.groupKey !== `GTIN:${candidate.gtin}`
+    ) {
+      fail(`${candidate.productCandidateId} has an invalid GTIN canonical key.`);
+    }
+    return;
+  }
+  validateOlistCanonicalKey(candidate);
+}
+
+function validateIncrementalCanonicalKey(
+  candidate: ProductMaterializationCandidate,
+): void {
+  validateOlistCanonicalKey(candidate);
+  if (
+    (candidate.action === 'CREATE_PRODUCT_AND_LINK' &&
+      candidate.proposedProductId !== null) ||
+    (candidate.action === 'REUSE_HIGH_PRODUCT_AND_LINK' &&
+      candidate.proposedProductId === null)
+  ) {
+    fail(`${candidate.productCandidateId} has an inconsistent Product action.`);
+  }
+}
+
+function validateOlistCanonicalKey(
+  candidate: ProductMaterializationCandidate,
+): void {
+  const [first] = candidate.listingItems;
+  const expectedSku = `PRD-OLIST-${first!.account}-${first!.olistProductId}`;
+  if (
+    candidate.listingItems.length !== 1 ||
+    candidate.proposedProductSku !== expectedSku ||
+    candidate.groupKey !== `${first!.account}:OLIST:${first!.olistProductId}`
+  ) {
+    fail(`${candidate.productCandidateId} has an invalid Olist canonical key.`);
+  }
+}
+
+function validatePlannedIdentities(
+  candidate: ProductMaterializationCandidate,
+): void {
+  const expected = candidate.listingItems.flatMap((item) =>
+    derivePlannedIdentities(candidate.proposedProductSku, item),
+  );
+  if (candidate.plannedIdentities.length !== expected.length) {
+    fail(`${candidate.productCandidateId} has incomplete planned identities.`);
+  }
+  for (const identity of candidate.plannedIdentities) {
+    const matchingExpected = expected.find(
+      (expectedIdentity) => samePlannedIdentity(expectedIdentity, identity),
+    );
+    if (!matchingExpected) {
+      fail(`${candidate.productCandidateId} has an inconsistent planned identity.`);
+    }
+    if (
+      (identity.action === 'CREATE' && identity.existingIdentityId !== null) ||
+      (identity.action === 'ALREADY_CORRECT' &&
+        (identity.existingIdentityId === null ||
+          identity.provider !== ProductIdentityProvider.OLIST))
+    ) {
+      fail(`${candidate.productCandidateId} has an inconsistent identity action.`);
+    }
+  }
+  const alreadyCorrect = candidate.plannedIdentities.filter(
+    ({ action }) => action === 'ALREADY_CORRECT',
+  );
+  if (
+    (candidate.action === 'CREATE_PRODUCT_AND_LINK' &&
+      alreadyCorrect.length !== 0) ||
+    (candidate.action === 'REUSE_HIGH_PRODUCT_AND_LINK' &&
+      alreadyCorrect.length === 0)
+  ) {
+    fail(`${candidate.productCandidateId} has inconsistent reuse identities.`);
+  }
+}
+
+function samePlannedIdentity(
+  left: PlannedExternalIdentity,
+  right: PlannedExternalIdentity,
+): boolean {
+  return (
+    left.candidateSku === right.candidateSku &&
+    left.businessAccountId === right.businessAccountId &&
+    left.provider === right.provider &&
+    left.sellerSku === right.sellerSku &&
+    left.externalListingId === right.externalListingId &&
+    left.externalVariationId === right.externalVariationId &&
+    left.marketplaceListingItemId === right.marketplaceListingItemId
+  );
 }
 
 function assertHighCandidate(candidate: ProductMaterializationCandidate): void {
@@ -579,15 +819,15 @@ function validateCandidateUniqueness(plan: ProductMaterializationPlan): void {
     addUnique(productSkus, candidate.proposedProductSku, 'Product.sku');
     for (const item of candidate.listingItems) {
       addUnique(listingItems, item.marketplaceListingItemId, 'listing item');
-      for (const identity of plannedIdentities(candidate, item)) {
-        const key = externalIdentityKey(identity);
-        const previousOwner = identityKeys.get(key);
-        if (previousOwner && previousOwner !== candidate.proposedProductSku) {
-          fail(`External identity ${key} is duplicated across candidates.`);
-        }
-        if (previousOwner) fail(`External identity ${key} is duplicated.`);
-        identityKeys.set(key, candidate.proposedProductSku);
+    }
+    for (const identity of candidate.plannedIdentities) {
+      const key = externalIdentityKey(identity);
+      const previousOwner = identityKeys.get(key);
+      if (previousOwner && previousOwner !== candidate.proposedProductSku) {
+        fail(`External identity ${key} is duplicated across candidates.`);
       }
+      if (previousOwner) fail(`External identity ${key} is duplicated.`);
+      identityKeys.set(key, candidate.proposedProductSku);
     }
   }
 }
@@ -599,16 +839,24 @@ function analyzeMaterialization(
   dryRun: boolean,
 ): ProductMaterializationAnalysis {
   const conflicts: string[] = [];
-  const existingProductIdsBySku = new Map(
-    state.products.map((product) => [product.sku, product.id]),
+  const existingProductIdsBySku = new Map<string, string>();
+  const productsBySku = new Map(
+    state.products.map((product) => [product.sku, product]),
+  );
+  const productsById = new Map(
+    state.products.map((product) => [product.id, product]),
   );
   const productSkusToCreate = new Set<string>();
   const listingItemIdsToLink = new Set<string>();
   const identitiesToCreate: PlannedExternalIdentity[] = [];
+  const targetProductIds = new Map<string, string | undefined>();
   const businessAccounts = new Map(
     state.businessAccounts.map((account) => [account.id, account]),
   );
   const listingItems = new Map(state.listingItems.map((item) => [item.id, item]));
+  const identitiesById = new Map(
+    state.externalIdentities.map((identity) => [identity.id, identity]),
+  );
   const identitiesBySellable = new Map<string, ExistingExternalIdentity[]>();
   const identitiesByListingItem = new Map<string, ExistingExternalIdentity[]>();
   for (const identity of state.externalIdentities) {
@@ -624,15 +872,44 @@ function analyzeMaterialization(
     }
   }
 
+  for (const candidate of plan.candidates) {
+    const productBySku = productsBySku.get(candidate.proposedProductSku);
+    if (candidate.action === 'REUSE_HIGH_PRODUCT_AND_LINK') {
+      const productById = productsById.get(candidate.proposedProductId!);
+      if (
+        !productById ||
+        productById.sku !== candidate.proposedProductSku ||
+        (productBySku !== undefined && productBySku.id !== productById.id)
+      ) {
+        conflicts.push(
+          `${candidate.productCandidateId}: destination Product ${candidate.proposedProductId} does not exactly match ${candidate.proposedProductSku}.`,
+        );
+        targetProductIds.set(candidate.proposedProductSku, undefined);
+      } else {
+        existingProductIdsBySku.set(productById.sku, productById.id);
+        targetProductIds.set(candidate.proposedProductSku, productById.id);
+      }
+      continue;
+    }
+    if (!productBySku) {
+      productSkusToCreate.add(candidate.proposedProductSku);
+      targetProductIds.set(candidate.proposedProductSku, undefined);
+    } else if (productBySku.name !== candidate.proposedProductName) {
+      conflicts.push(
+        `${candidate.productCandidateId}: existing Product ${productBySku.id} has a different canonical name.`,
+      );
+      targetProductIds.set(candidate.proposedProductSku, undefined);
+    } else {
+      existingProductIdsBySku.set(productBySku.sku, productBySku.id);
+      targetProductIds.set(candidate.proposedProductSku, productBySku.id);
+    }
+  }
+
   let listingLinksAlreadyCorrect = 0;
   let mercadoLivreIdentitiesAlreadyCorrect = 0;
   let olistIdentitiesAlreadyCorrect = 0;
   for (const candidate of plan.candidates) {
-    const existingProductId = existingProductIdsBySku.get(
-      candidate.proposedProductSku,
-    );
-    if (!existingProductId) productSkusToCreate.add(candidate.proposedProductSku);
-
+    const targetProductId = targetProductIds.get(candidate.proposedProductSku);
     for (const plannedItem of candidate.listingItems) {
       const businessAccount = businessAccounts.get(plannedItem.businessAccountId);
       if (!businessAccount || businessAccount.code !== plannedItem.account) {
@@ -649,7 +926,10 @@ function analyzeMaterialization(
         validateListingItemSnapshot(candidate, plannedItem, currentItem, conflicts);
         if (currentItem.productId === null) {
           listingItemIdsToLink.add(plannedItem.marketplaceListingItemId);
-        } else if (existingProductId && currentItem.productId === existingProductId) {
+        } else if (
+          targetProductId !== undefined &&
+          currentItem.productId === targetProductId
+        ) {
           listingLinksAlreadyCorrect += 1;
         } else {
           conflicts.push(
@@ -657,44 +937,57 @@ function analyzeMaterialization(
           );
         }
       }
+    }
 
-      for (const identity of plannedIdentities(candidate, plannedItem)) {
-        const matches = new Map<string, ExistingExternalIdentity>();
-        for (const match of identitiesBySellable.get(externalIdentityKey(identity)) ?? []) {
+    for (const identity of candidate.plannedIdentities) {
+      const matches = new Map<string, ExistingExternalIdentity>();
+      for (const match of
+        identitiesBySellable.get(externalIdentityKey(identity)) ?? []) {
+        matches.set(match.id, match);
+      }
+      if (identity.marketplaceListingItemId !== null) {
+        for (const match of
+          identitiesByListingItem.get(identity.marketplaceListingItemId) ?? []) {
           matches.set(match.id, match);
         }
-        if (identity.marketplaceListingItemId !== null) {
-          for (const match of
-            identitiesByListingItem.get(identity.marketplaceListingItemId) ?? []) {
-            matches.set(match.id, match);
-          }
-        }
-        if (matches.size > 1) {
+      }
+      if (identity.existingIdentityId !== null) {
+        const match = identitiesById.get(identity.existingIdentityId);
+        if (match) matches.set(match.id, match);
+      }
+      if (matches.size > 1) {
+        conflicts.push(
+          `${candidate.productCandidateId}: identity ${externalIdentityKey(identity)} resolves to multiple current rows.`,
+        );
+        continue;
+      }
+      const [currentIdentity] = matches.values();
+      if (!currentIdentity) {
+        if (identity.action === 'ALREADY_CORRECT') {
           conflicts.push(
-            `${candidate.productCandidateId}: identity ${externalIdentityKey(identity)} resolves to multiple current rows.`,
+            `${candidate.productCandidateId}: approved existing identity ${identity.existingIdentityId} is missing.`,
           );
-          continue;
-        }
-        const [currentIdentity] = matches.values();
-        if (!currentIdentity) {
-          identitiesToCreate.push(identity);
-          continue;
-        }
-        if (
-          !existingProductId ||
-          currentIdentity.productId !== existingProductId ||
-          !sameIdentity(currentIdentity, identity)
-        ) {
-          conflicts.push(
-            `${candidate.productCandidateId}: identity ${externalIdentityKey(identity)} belongs to another Product or has different attributes.`,
-          );
-          continue;
-        }
-        if (identity.provider === ProductIdentityProvider.MERCADO_LIVRE) {
-          mercadoLivreIdentitiesAlreadyCorrect += 1;
         } else {
-          olistIdentitiesAlreadyCorrect += 1;
+          identitiesToCreate.push(identity);
         }
+        continue;
+      }
+      if (
+        targetProductId === undefined ||
+        currentIdentity.productId !== targetProductId ||
+        !sameIdentity(currentIdentity, identity) ||
+        (identity.existingIdentityId !== null &&
+          currentIdentity.id !== identity.existingIdentityId)
+      ) {
+        conflicts.push(
+          `${candidate.productCandidateId}: identity ${externalIdentityKey(identity)} belongs to another Product or has different attributes.`,
+        );
+        continue;
+      }
+      if (identity.provider === ProductIdentityProvider.MERCADO_LIVRE) {
+        mercadoLivreIdentitiesAlreadyCorrect += 1;
+      } else {
+        olistIdentitiesAlreadyCorrect += 1;
       }
     }
   }
@@ -710,7 +1003,7 @@ function analyzeMaterialization(
     planSha256,
     candidateIds: plan.candidates.map(({ productCandidateId }) => productCandidateId),
     approvedTotals: {
-      products: plan.candidates.length,
+      products: plan.summary.productCandidates,
       listingItems: plan.summary.listingItemsHigh,
       mercadoLivreIdentities:
         plan.summary.plannedWritesIfLaterAuthorized.MercadoLivreIdentities,
@@ -721,8 +1014,8 @@ function analyzeMaterialization(
       bothAccounts: plan.summary.bothC1AndC2,
     },
     productsToCreate: productSkusToCreate.size,
-    productsAlreadyMaterialized:
-      plan.candidates.length - productSkusToCreate.size,
+    productsToReuse: plan.summary.productsToReuse,
+    productsAlreadyMaterialized: existingProductIdsBySku.size,
     listingLinksToCreate: listingItemIdsToLink.size,
     listingLinksAlreadyCorrect,
     mercadoLivreIdentitiesToCreate,
@@ -768,28 +1061,32 @@ function validateListingItemSnapshot(
   }
 }
 
-function plannedIdentities(
-  candidate: ProductMaterializationCandidate,
+function derivePlannedIdentities(
+  candidateSku: string,
   item: ProductMaterializationListingItem,
 ): PlannedExternalIdentity[] {
   return [
     {
-      candidateSku: candidate.proposedProductSku,
+      candidateSku,
       businessAccountId: item.businessAccountId,
       provider: ProductIdentityProvider.MERCADO_LIVRE,
       sellerSku: item.sellerSku,
       externalListingId: item.externalListingId,
       externalVariationId: item.externalVariationId,
       marketplaceListingItemId: item.marketplaceListingItemId,
+      action: 'CREATE',
+      existingIdentityId: null,
     },
     {
-      candidateSku: candidate.proposedProductSku,
+      candidateSku,
       businessAccountId: item.businessAccountId,
       provider: ProductIdentityProvider.OLIST,
       sellerSku: item.olistSku,
       externalListingId: item.olistProductId,
       externalVariationId: null,
       marketplaceListingItemId: null,
+      action: 'CREATE',
+      existingIdentityId: null,
     },
   ];
 }
@@ -895,12 +1192,49 @@ function integer(value: Record<string, unknown>, key: string): number {
   return result as number;
 }
 
+function boolean(value: Record<string, unknown>, key: string): boolean {
+  const result = value[key];
+  if (typeof result !== 'boolean') fail(`${key} must be a boolean.`);
+  return result;
+}
+
+function materializationAction(
+  value: Record<string, unknown>,
+  key: string,
+): ProductMaterializationCandidate['action'] {
+  const result = text(value, key);
+  if (
+    result !== 'CREATE_PRODUCT_AND_LINK' &&
+    result !== 'REUSE_HIGH_PRODUCT_AND_LINK'
+  ) {
+    fail(`${key} must be a supported materialization action.`);
+  }
+  return result;
+}
+
 function uuid(value: Record<string, unknown>, key: string): string {
   const result = text(value, key);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) {
     fail(`${key} must be a UUID.`);
   }
   return result;
+}
+
+function nullableUuid(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  const result = value[key];
+  if (result === null) return null;
+  return uuid(value, key);
+}
+
+function optionalNullableUuid(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  if (value[key] === undefined) return null;
+  return nullableUuid(value, key);
 }
 
 function fail(message: string): never {

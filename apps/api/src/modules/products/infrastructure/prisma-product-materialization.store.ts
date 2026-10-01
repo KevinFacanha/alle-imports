@@ -31,6 +31,16 @@ export class PrismaProductMaterializationStore
     const productSkus = plan.candidates.map(
       ({ proposedProductSku }) => proposedProductSku,
     );
+    const proposedProductIds = plan.candidates.flatMap(
+      ({ proposedProductId }) =>
+        proposedProductId === null ? [] : [proposedProductId],
+    );
+    const plannedExistingIdentityIds = plan.candidates.flatMap(
+      ({ plannedIdentities }) =>
+        plannedIdentities.flatMap(({ existingIdentityId }) =>
+          existingIdentityId === null ? [] : [existingIdentityId],
+        ),
+    );
     const businessAccountIds = [
       ...new Set(
         plan.candidates.flatMap(({ listingItems }) =>
@@ -46,7 +56,12 @@ export class PrismaProductMaterializationStore
 
     const [products, businessAccounts, listingItems] = await Promise.all([
       this.client.product.findMany({
-        where: { sku: { in: productSkus } },
+        where: {
+          OR: [
+            { sku: { in: productSkus } },
+            { id: { in: proposedProductIds } },
+          ],
+        },
         select: { id: true, sku: true, name: true },
       }),
       this.client.businessAccount.findMany({
@@ -96,6 +111,7 @@ export class PrismaProductMaterializationStore
     const identityScopes: Prisma.ProductExternalIdentityWhereInput[] = [
       ...sellableKeys,
       { marketplaceListingItemId: { in: listingItemIds } },
+      { id: { in: plannedExistingIdentityIds } },
     ];
     if (products.length > 0) {
       identityScopes.push({ productId: { in: products.map(({ id }) => id) } });
