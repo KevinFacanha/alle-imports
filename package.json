@@ -31,6 +31,7 @@
     "inspect:olist:only": "npm run inspect:olist:only --workspace=@ale-intelligence/api --",
     "inspect:gefinance-report": "npm run inspect:gefinance-report --workspace=@ale-intelligence/api --",
     "list:integration:accounts": "npm run list:integration:accounts --workspace=@ale-intelligence/api",
+    "materialize:products": "npm run materialize:products --workspace=@ale-intelligence/api --",
     "typecheck": "next typegen && tsc --noEmit",
     "db:generate": "npm run db:generate --workspace=@ale-intelligence/api",
     "db:validate": "npm run db:validate --workspace=@ale-intelligence/api",

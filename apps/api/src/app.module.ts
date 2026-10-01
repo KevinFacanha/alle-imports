@@ -7,6 +7,7 @@ import { HealthModule } from './health/health.module.js';
 import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { OlistModule } from './modules/integrations/olist/olist.module.js';
 import { MercadoLivreModule } from './modules/marketplaces/mercado-livre/mercado-livre.module.js';
+import { ProductsModule } from './modules/products/products.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { MercadoLivreModule } from './modules/marketplaces/mercado-livre/mercado
     AnalyticsModule,
     MercadoLivreModule,
     OlistModule,
+    ProductsModule,
   ],
 })
 export class AppModule {}
