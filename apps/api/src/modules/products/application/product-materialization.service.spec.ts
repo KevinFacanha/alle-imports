@@ -21,39 +21,52 @@ const C1_MARKETPLACE_ID = '11000000-0000-4000-8000-000000000001';
 const C2_MARKETPLACE_ID = '22000000-0000-4000-8000-000000000002';
 
 describe('ProductMaterializationService', () => {
-  it('plans one C1 Product with one link and account-scoped ML/Olist identities', async () => {
+  it('executes one C1 Product with one link and account-scoped ML/Olist identities', async () => {
     const candidate = candidateFixture(1, 'C1', '101');
-    const { execution } = await dryRun([candidate]);
+    const { execution, store } = await authorizedExecution([candidate]);
 
+    assert.equal(execution.mode, 'EXECUTE');
     assert.equal(execution.productsToCreate, 1);
     assert.equal(execution.listingLinksToCreate, 1);
     assert.equal(execution.mercadoLivreIdentitiesToCreate, 1);
     assert.equal(execution.olistIdentitiesToCreate, 1);
     assert.equal(execution.externalIdentitiesToCreate, 2);
+    assert.equal(execution.writesPerformed, 4);
     assert.equal(execution.conflicts.length, 0);
     assert.equal(candidate.proposedProductSku, 'PRD-OLIST-C1-101');
+    assert.equal(store.transactionCalls, 1);
+    assert.equal(store.state.listingItems[0]!.productId, 'product-1');
   });
 
-  it('plans one C2 Product with Olist identity isolated to C2', async () => {
+  it('executes one C2 Product with Olist identity isolated to C2', async () => {
     const candidate = candidateFixture(2, 'C2', '202');
-    const { execution, store } = await dryRun([candidate]);
+    const { execution, store } = await authorizedExecution([candidate]);
 
     assert.equal(execution.productsToCreate, 1);
     assert.equal(execution.externalIdentitiesToCreate, 2);
+    assert.equal(execution.writesPerformed, 4);
     assert.equal(candidate.listingItems[0]!.businessAccountId, C2_ID);
-    assert.equal(store.applyCalls, 0);
+    assert.equal(store.state.externalIdentities.length, 2);
+    assert.ok(
+      store.state.externalIdentities.every(
+        ({ businessAccountId }) => businessAccountId === C2_ID,
+      ),
+    );
   });
 
-  it('plans one shared C1+C2 Product with two links and four identities', async () => {
+  it('executes one cross-account C1+C2 Product atomically', async () => {
     const candidate = sharedCandidateFixture(3);
-    const { execution } = await dryRun([candidate]);
+    const { execution, store } = await authorizedExecution([candidate]);
 
     assert.equal(execution.productsToCreate, 1);
     assert.equal(execution.listingLinksToCreate, 2);
     assert.equal(execution.mercadoLivreIdentitiesToCreate, 2);
     assert.equal(execution.olistIdentitiesToCreate, 2);
     assert.equal(execution.approvedTotals.bothAccounts, 1);
+    assert.equal(execution.writesPerformed, 7);
     assert.equal(candidate.proposedProductSku, 'PRD-GTIN-7890000000003');
+    assert.equal(store.transactionCalls, 1);
+    assert.equal(new Set(store.state.listingItems.map(({ productId }) => productId)).size, 1);
   });
 
   it('allows repeated sellerSku across distinct Products without using it as Product.sku', async () => {
@@ -74,8 +87,8 @@ describe('ProductMaterializationService', () => {
     const store = new FakeMaterializationStore(plan);
     const service = new ProductMaterializationService(store, approval);
 
-    const first = await service.execute({ planContents: contents, dryRun: false });
-    const second = await service.execute({ planContents: contents, dryRun: false });
+    const first = await service.execute({ planContents: contents, execute: true });
+    const second = await service.execute({ planContents: contents, execute: true });
 
     assert.equal(first.writesPerformed, 4);
     assert.equal(second.writesPerformed, 0);
@@ -98,11 +111,12 @@ describe('ProductMaterializationService', () => {
     await assert.rejects(
       new ProductMaterializationService(store, approval).execute({
         planContents: contents,
-        dryRun: true,
+        execute: true,
       }),
       new RegExp('belongs to another Product'),
     );
     assert.equal(store.applyCalls, 0);
+    assert.equal(store.transactionCalls, 1);
   });
 
   it('blocks when a listing item is already linked to a different Product', async () => {
@@ -115,16 +129,23 @@ describe('ProductMaterializationService', () => {
     await assert.rejects(
       new ProductMaterializationService(store, approval).execute({
         planContents: contents,
-        dryRun: true,
+        execute: true,
       }),
       new RegExp('listing item .* belongs to another Product'),
     );
     assert.equal(store.applyCalls, 0);
+    assert.equal(store.transactionCalls, 1);
   });
 
-  it('performs no writes or transaction in dry-run', async () => {
+  it('performs zero writes without the explicit execute opt-in', async () => {
     const candidate = candidateFixture(9, 'C1', '909');
-    const { execution, store } = await dryRun([candidate]);
+    const plan = planFixture([candidate]);
+    const { contents, approval } = approvedContents(plan);
+    const store = new FakeMaterializationStore(plan);
+    const execution = await new ProductMaterializationService(
+      store,
+      approval,
+    ).execute({ planContents: contents });
 
     assert.equal(execution.mode, 'DRY_RUN');
     assert.equal(execution.writesPerformed, 0);
@@ -134,6 +155,51 @@ describe('ProductMaterializationService', () => {
     assert.equal(store.state.externalIdentities.length, 0);
     assert.equal(store.state.listingItems[0]!.productId, null);
   });
+
+  it('filters repeated candidate arguments and uses one transaction per Product', async () => {
+    const first = candidateFixture(10, 'C1', '1010');
+    const second = candidateFixture(11, 'C2', '1111');
+    const skipped = candidateFixture(12, 'C1', '1212');
+    const plan = planFixture([first, second, skipped]);
+    const { contents, approval } = approvedContents(plan);
+    const store = new FakeMaterializationStore(plan);
+
+    const execution = await new ProductMaterializationService(
+      store,
+      approval,
+    ).execute({
+      planContents: contents,
+      execute: true,
+      candidateIds: [first.productCandidateId, second.productCandidateId],
+    });
+
+    assert.deepEqual(execution.candidateIds, [
+      first.productCandidateId,
+      second.productCandidateId,
+    ]);
+    assert.equal(execution.writesPerformed, 8);
+    assert.equal(store.transactionCalls, 2);
+    assert.equal(store.state.products.length, 2);
+    assert.equal(store.state.listingItems[2]!.productId, null);
+  });
+
+  it('rejects a candidate that is absent from the approved plan before writing', async () => {
+    const plan = planFixture([candidateFixture(13, 'C1', '1313')]);
+    const { contents, approval } = approvedContents(plan);
+    const store = new FakeMaterializationStore(plan);
+
+    await assert.rejects(
+      new ProductMaterializationService(store, approval).execute({
+        planContents: contents,
+        execute: true,
+        candidateIds: ['PC-HIGH-999'],
+      }),
+      /does not exist in the approved plan/,
+    );
+    assert.equal(store.transactionCalls, 0);
+    assert.equal(store.applyCalls, 0);
+  });
+
 });
 
 async function dryRun(candidates: ProductMaterializationCandidate[]) {
@@ -143,7 +209,18 @@ async function dryRun(candidates: ProductMaterializationCandidate[]) {
   const execution = await new ProductMaterializationService(
     store,
     approval,
-  ).execute({ planContents: contents, dryRun: true });
+  ).execute({ planContents: contents });
+  return { execution, store };
+}
+
+async function authorizedExecution(candidates: ProductMaterializationCandidate[]) {
+  const plan = planFixture(candidates);
+  const { contents, approval } = approvedContents(plan);
+  const store = new FakeMaterializationStore(plan);
+  const execution = await new ProductMaterializationService(
+    store,
+    approval,
+  ).execute({ planContents: contents, execute: true });
   return { execution, store };
 }
 

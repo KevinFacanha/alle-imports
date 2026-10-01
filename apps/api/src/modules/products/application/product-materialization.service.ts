@@ -25,6 +25,7 @@ export interface ProductMaterializationApproval {
 export interface ProductMaterializationExecution {
   mode: 'DRY_RUN' | 'EXECUTE';
   planSha256: string;
+  candidateIds: string[];
   approvedTotals: {
     products: number;
     listingItems: number;
@@ -184,7 +185,8 @@ export class ProductMaterializationService {
 
   async execute(input: {
     planContents: Buffer;
-    dryRun: boolean;
+    execute?: boolean;
+    candidateIds?: string[];
   }): Promise<ProductMaterializationExecution> {
     const planSha256 = createHash('sha256')
       .update(input.planContents)
@@ -195,20 +197,146 @@ export class ProductMaterializationService {
       );
     }
 
-    const plan = parseAndValidatePlan(input.planContents, this.approval);
-    if (input.dryRun) {
+    const approvedPlan = parseAndValidatePlan(input.planContents, this.approval);
+    const plan = selectCandidates(approvedPlan, input.candidateIds ?? []);
+    if (input.execute !== true) {
       const state = await this.store.loadState(plan);
       return analyzeMaterialization(plan, state, planSha256, true).execution;
     }
 
-    return this.store.runInTransaction(async (transactionStore) => {
-      const state = await transactionStore.loadState(plan);
-      const analysis = analyzeMaterialization(plan, state, planSha256, false);
-      assertNoConflicts(analysis.execution);
-      const writesPerformed = await transactionStore.apply(analysis);
-      return { ...analysis.execution, writesPerformed };
-    });
+    const candidateExecutions: ProductMaterializationExecution[] = [];
+    for (const candidate of plan.candidates) {
+      const candidatePlan = planForCandidates(plan, [candidate]);
+      const execution = await this.store.runInTransaction(
+        async (transactionStore) => {
+          const state = await transactionStore.loadState(candidatePlan);
+          const analysis = analyzeMaterialization(
+            candidatePlan,
+            state,
+            planSha256,
+            false,
+          );
+          assertNoConflicts(analysis.execution);
+          const writesPerformed = await transactionStore.apply(analysis);
+          return { ...analysis.execution, writesPerformed };
+        },
+      );
+      candidateExecutions.push(execution);
+    }
+    return combineExecutions(plan, planSha256, candidateExecutions);
   }
+}
+
+function selectCandidates(
+  approvedPlan: ProductMaterializationPlan,
+  requestedCandidateIds: string[],
+): ProductMaterializationPlan {
+  if (requestedCandidateIds.length === 0) return approvedPlan;
+
+  const requested = new Set<string>();
+  for (const candidateId of requestedCandidateIds) {
+    if (!isNonEmptyString(candidateId)) {
+      fail('Candidate id must be a non-empty string.');
+    }
+    addUnique(requested, candidateId, 'requested candidate id');
+  }
+  const candidatesById = new Map(
+    approvedPlan.candidates.map((candidate) => [
+      candidate.productCandidateId,
+      candidate,
+    ]),
+  );
+  const candidates = requestedCandidateIds.map((candidateId) => {
+    const candidate = candidatesById.get(candidateId);
+    if (!candidate) {
+      fail(`Candidate ${candidateId} does not exist in the approved plan.`);
+    }
+    assertHighCandidate(candidate);
+    return candidate;
+  });
+  return planForCandidates(approvedPlan, candidates);
+}
+
+function planForCandidates(
+  source: ProductMaterializationPlan,
+  candidates: ProductMaterializationCandidate[],
+): ProductMaterializationPlan {
+  const listingItems = candidates.reduce(
+    (total, candidate) => total + candidate.listingItems.length,
+    0,
+  );
+  const bothAccounts = candidates.filter(
+    ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
+  ).length;
+  return {
+    diagnostic: source.diagnostic,
+    summary: {
+      listingItemsHigh: listingItems,
+      productCandidates: candidates.length,
+      bothC1AndC2: bothAccounts,
+      ready: candidates.length,
+      blocked: 0,
+      plannedWritesIfLaterAuthorized: {
+        Product: candidates.length,
+        MarketplaceListingItemProductLinks: listingItems,
+        ProductExternalIdentity: listingItems * 2,
+        MercadoLivreIdentities: listingItems,
+        OlistIdentities: listingItems,
+      },
+    },
+    candidates,
+  };
+}
+
+function combineExecutions(
+  plan: ProductMaterializationPlan,
+  planSha256: string,
+  executions: ProductMaterializationExecution[],
+): ProductMaterializationExecution {
+  const total = (
+    key:
+      | 'productsToCreate'
+      | 'productsAlreadyMaterialized'
+      | 'listingLinksToCreate'
+      | 'listingLinksAlreadyCorrect'
+      | 'mercadoLivreIdentitiesToCreate'
+      | 'mercadoLivreIdentitiesAlreadyCorrect'
+      | 'olistIdentitiesToCreate'
+      | 'olistIdentitiesAlreadyCorrect'
+      | 'externalIdentitiesToCreate'
+      | 'externalIdentitiesAlreadyCorrect'
+      | 'writesPerformed',
+  ): number => executions.reduce((sum, execution) => sum + execution[key], 0);
+  return {
+    mode: 'EXECUTE',
+    planSha256,
+    candidateIds: plan.candidates.map(({ productCandidateId }) => productCandidateId),
+    approvedTotals: {
+      products: plan.summary.productCandidates,
+      listingItems: plan.summary.listingItemsHigh,
+      mercadoLivreIdentities:
+        plan.summary.plannedWritesIfLaterAuthorized.MercadoLivreIdentities,
+      olistIdentities:
+        plan.summary.plannedWritesIfLaterAuthorized.OlistIdentities,
+      externalIdentities:
+        plan.summary.plannedWritesIfLaterAuthorized.ProductExternalIdentity,
+      bothAccounts: plan.summary.bothC1AndC2,
+    },
+    productsToCreate: total('productsToCreate'),
+    productsAlreadyMaterialized: total('productsAlreadyMaterialized'),
+    listingLinksToCreate: total('listingLinksToCreate'),
+    listingLinksAlreadyCorrect: total('listingLinksAlreadyCorrect'),
+    mercadoLivreIdentitiesToCreate: total('mercadoLivreIdentitiesToCreate'),
+    mercadoLivreIdentitiesAlreadyCorrect: total(
+      'mercadoLivreIdentitiesAlreadyCorrect',
+    ),
+    olistIdentitiesToCreate: total('olistIdentitiesToCreate'),
+    olistIdentitiesAlreadyCorrect: total('olistIdentitiesAlreadyCorrect'),
+    externalIdentitiesToCreate: total('externalIdentitiesToCreate'),
+    externalIdentitiesAlreadyCorrect: total('externalIdentitiesAlreadyCorrect'),
+    conflicts: executions.flatMap(({ conflicts }) => conflicts),
+    writesPerformed: total('writesPerformed'),
+  };
 }
 
 function parseAndValidatePlan(
@@ -366,6 +494,7 @@ function validateApprovedCounts(
 }
 
 function validateCandidate(candidate: ProductMaterializationCandidate): void {
+  assertHighCandidate(candidate);
   if (
     candidate.status !== 'READY' ||
     candidate.blockers.length !== 0 ||
@@ -429,6 +558,12 @@ function validateCandidate(candidate: ProductMaterializationCandidate): void {
     ) {
       fail(`${candidate.productCandidateId} has an inconsistent Olist identity.`);
     }
+  }
+}
+
+function assertHighCandidate(candidate: ProductMaterializationCandidate): void {
+  if (!/^PC-HIGH-[A-Z0-9][A-Z0-9-]*$/.test(candidate.productCandidateId)) {
+    fail(`${candidate.productCandidateId} is not classified HIGH.`);
   }
 }
 
@@ -573,6 +708,7 @@ function analyzeMaterialization(
   const execution: ProductMaterializationExecution = {
     mode: dryRun ? 'DRY_RUN' : 'EXECUTE',
     planSha256,
+    candidateIds: plan.candidates.map(({ productCandidateId }) => productCandidateId),
     approvedTotals: {
       products: plan.candidates.length,
       listingItems: plan.summary.listingItemsHigh,
