@@ -562,7 +562,7 @@ function classifyByCumulativeBefore(
   return 'C';
 }
 
-function businessDateDifference(
+export function businessDateDifference(
   from: Date,
   to: Date,
   timeZone: string,
