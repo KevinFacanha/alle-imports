@@ -326,6 +326,115 @@ describe('ProductMaterializationService', () => {
     assert.equal(execution.externalIdentitiesToCreate, 2);
   });
 
+  it('dry-runs grouped deterministic item-order evidence with one Olist identity', async () => {
+    const first = listingItemFixture(19, 'C1', '9191', '1215');
+    const second = listingItemFixture(20, 'C1', '9191', '1215');
+    const withEvidence = (item: typeof first, index: number) => ({
+      ...item,
+      candidateId: `PC-HIGH-ITEM-${index}`,
+      correlatedOrderCount: 2,
+      conflictingOrderCount: 0,
+      ordersUsed: [1, 2].map((order) => ({
+        mlOrderId: `ml-${index}-${order}`,
+        olistOrderId: `olist-${index}-${order}`,
+        olistProductId: item.olistProductId,
+      })),
+    });
+    const proposedProductSku = 'PRD-OLIST-C1-9191';
+    const candidate = {
+      productCandidateId: 'PC-HIGH-OLIST-C1-9191',
+      classification: 'DETERMINISTIC_HIGH' as const,
+      action: 'CREATE_PRODUCT_AND_LINK' as const,
+      groupKey: 'C1:OLIST:9191',
+      identityBasis:
+        'EXACT_ITEM_TO_ITEM_ORDER_CORRELATION_TO_SINGLE_OLIST_PRODUCT_ID',
+      evidenceHigh: ['ORDER_PRODUCT_ID'],
+      accounts: ['C1'],
+      listingItemCount: 2,
+      olistProductIds: { C1: ['9191'] },
+      gtin: null,
+      observedSkus: ['1215'],
+      proposedProductSku,
+      proposedProductName: 'Grouped product',
+      proposedProductId: null,
+      listingItems: [withEvidence(first, 1), withEvidence(second, 2)],
+      plannedIdentities: [
+        ...[first, second].map((item) => ({
+          candidateSku: proposedProductSku,
+          businessAccountId: item.businessAccountId,
+          provider: ProductIdentityProvider.MERCADO_LIVRE,
+          sellerSku: item.sellerSku,
+          externalListingId: item.externalListingId,
+          externalVariationId: item.externalVariationId,
+          marketplaceListingItemId: item.marketplaceListingItemId,
+          action: 'CREATE' as const,
+          existingIdentityId: null,
+        })),
+        {
+          candidateSku: proposedProductSku,
+          businessAccountId: first.businessAccountId,
+          provider: ProductIdentityProvider.OLIST,
+          sellerSku: first.olistSku,
+          externalListingId: first.olistProductId,
+          externalVariationId: null,
+          marketplaceListingItemId: null,
+          action: 'CREATE' as const,
+          existingIdentityId: null,
+        },
+      ],
+      status: 'READY',
+      blockers: [],
+    };
+    const plan = {
+      diagnostic: 'READ_ONLY_ITEM_ORDER_CORRELATION_MATERIALIZATION_PLAN',
+      version: 1,
+      sourceAudit: {
+        classification: 'DETERMINISTIC_HIGH',
+        reportPath: 'audit.md',
+        repositoryCommit: '0123456789abcdef',
+        rule: {
+          exactMarketplaceOrderCorrelation: true,
+          singleMlAndOlistLinePerEvidenceOrder: true,
+          minimumIndependentCorrelatedOrders: 2,
+          singleOlistProductIdPerListing: true,
+          divergentEvidenceAllowed: 0,
+          titleOrFuzzyIdentityAllowed: false,
+          sellerSkuAsGlobalIdentityAllowed: false,
+        },
+      },
+      summary: {
+        listingItemsHigh: 2,
+        productCandidates: 1,
+        bothC1AndC2: 0,
+        productsToCreate: 1,
+        productsToReuse: 0,
+        ready: 1,
+        blocked: 0,
+        plannedWritesIfLaterAuthorized: {
+          Product: 1,
+          MarketplaceListingItemProductLinks: 2,
+          ProductExternalIdentity: 3,
+          MercadoLivreIdentities: 2,
+          OlistIdentities: 1,
+        },
+      },
+      candidates: [candidate],
+    } as ProductMaterializationPlan & Record<string, unknown>;
+    const { contents, expectedSha256 } = approvedContents(plan);
+    const store = new FakeMaterializationStore(plan);
+    const execution = await new ProductMaterializationService(store).execute({
+      planContents: contents,
+      expectedSha256,
+    });
+
+    assert.equal(execution.productsToCreate, 1);
+    assert.equal(execution.listingLinksToCreate, 2);
+    assert.equal(execution.mercadoLivreIdentitiesToCreate, 2);
+    assert.equal(execution.olistIdentitiesToCreate, 1);
+    assert.deepEqual(execution.conflicts, []);
+    assert.equal(execution.writesPerformed, 0);
+  });
+
 });
 
 function incrementalCandidateFixture(

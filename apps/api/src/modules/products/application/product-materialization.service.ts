@@ -104,7 +104,7 @@ export interface ProductMaterializationPlan {
 
 export interface ProductMaterializationCandidate {
   productCandidateId: string;
-  classification: 'HIGH' | 'PROMOTABLE_TO_HIGH';
+  classification: 'HIGH' | 'PROMOTABLE_TO_HIGH' | 'DETERMINISTIC_HIGH';
   action: 'CREATE_PRODUCT_AND_LINK' | 'REUSE_HIGH_PRODUCT_AND_LINK';
   groupKey: string;
   evidenceHigh: string[];
@@ -358,23 +358,30 @@ function parseAndValidatePlan(contents: Buffer): ProductMaterializationPlan {
   if (!isRecord(value)) fail('Plan root must be an object.');
   const diagnostic = text(value, 'diagnostic');
   const incremental = diagnostic === 'READ_ONLY_INCREMENTAL_MATERIALIZATION_PLAN';
-  if (!incremental && diagnostic !== 'READ_ONLY_MATERIALIZATION_PLAN') {
+  const itemOrderCorrelation =
+    diagnostic === 'READ_ONLY_ITEM_ORDER_CORRELATION_MATERIALIZATION_PLAN';
+  if (
+    !incremental &&
+    !itemOrderCorrelation &&
+    diagnostic !== 'READ_ONLY_MATERIALIZATION_PLAN'
+  ) {
     fail('Plan diagnostic is not an approved materialization plan type.');
   }
   if (incremental) validateIncrementalSource(value);
+  if (itemOrderCorrelation) validateItemOrderCorrelationSource(value);
 
   const summary = record(value, 'summary');
   const writes = record(summary, 'plannedWritesIfLaterAuthorized');
   const candidates = array(value, 'candidates').map((candidate, index) =>
-    parseCandidate(candidate, index, incremental),
+    parseCandidate(candidate, index, incremental, itemOrderCorrelation),
   );
   const bothC1AndC2 = candidates.filter(
     ({ accounts }) => accounts.includes('C1') && accounts.includes('C2'),
   ).length;
-  const productsToCreate = incremental
+  const productsToCreate = incremental || itemOrderCorrelation
     ? integer(summary, 'productsToCreate')
     : candidates.length;
-  const productsToReuse = incremental
+  const productsToReuse = incremental || itemOrderCorrelation
     ? integer(summary, 'productsToReuse')
     : 0;
 
@@ -409,6 +416,32 @@ function parseAndValidatePlan(contents: Buffer): ProductMaterializationPlan {
   return plan;
 }
 
+function validateItemOrderCorrelationSource(
+  value: Record<string, unknown>,
+): void {
+  if (integer(value, 'version') !== 1) {
+    fail('Item order correlation plan version must be 1.');
+  }
+  const sourceAudit = record(value, 'sourceAudit');
+  if (text(sourceAudit, 'classification') !== 'DETERMINISTIC_HIGH') {
+    fail('Item order correlation source classification is not DETERMINISTIC_HIGH.');
+  }
+  text(sourceAudit, 'reportPath');
+  text(sourceAudit, 'repositoryCommit');
+  const rule = record(sourceAudit, 'rule');
+  if (
+    boolean(rule, 'exactMarketplaceOrderCorrelation') !== true ||
+    boolean(rule, 'singleMlAndOlistLinePerEvidenceOrder') !== true ||
+    integer(rule, 'minimumIndependentCorrelatedOrders') < 2 ||
+    boolean(rule, 'singleOlistProductIdPerListing') !== true ||
+    integer(rule, 'divergentEvidenceAllowed') !== 0 ||
+    boolean(rule, 'titleOrFuzzyIdentityAllowed') !== false ||
+    boolean(rule, 'sellerSkuAsGlobalIdentityAllowed') !== false
+  ) {
+    fail('Item order correlation source rule is not approved.');
+  }
+}
+
 function validateIncrementalSource(value: Record<string, unknown>): void {
   if (integer(value, 'version') !== 1) fail('Incremental plan version must be 1.');
   const sourceAudit = record(value, 'sourceAudit');
@@ -437,6 +470,7 @@ function parseCandidate(
   value: unknown,
   index: number,
   incremental: boolean,
+  itemOrderCorrelation: boolean,
 ): ProductMaterializationCandidate {
   if (!isRecord(value)) fail(`Candidate ${index + 1} must be an object.`);
   const listingItems = array(value, 'listingItems').map((item, itemIndex) =>
@@ -454,8 +488,12 @@ function parseCandidate(
   const proposedProductSku = text(value, 'proposedProductSku');
   const candidate: ProductMaterializationCandidate = {
     productCandidateId: text(value, 'productCandidateId'),
-    classification: incremental ? 'PROMOTABLE_TO_HIGH' : 'HIGH',
-    action: incremental
+    classification: incremental
+      ? 'PROMOTABLE_TO_HIGH'
+      : itemOrderCorrelation
+        ? 'DETERMINISTIC_HIGH'
+        : 'HIGH',
+    action: incremental || itemOrderCorrelation
       ? materializationAction(value, 'action')
       : 'CREATE_PRODUCT_AND_LINK',
     groupKey: text(value, 'groupKey'),
@@ -467,7 +505,7 @@ function parseCandidate(
     observedSkus: stringArray(value, 'observedSkus'),
     proposedProductSku,
     proposedProductName: text(value, 'proposedProductName'),
-    proposedProductId: incremental
+    proposedProductId: incremental || itemOrderCorrelation
       ? nullableUuid(value, 'proposedProductId')
       : null,
     listingItems,
@@ -475,7 +513,7 @@ function parseCandidate(
     status: text(value, 'status'),
     blockers: array(value, 'blockers'),
   };
-  candidate.plannedIdentities = incremental
+  candidate.plannedIdentities = incremental || itemOrderCorrelation
     ? array(value, 'plannedIdentities').map((identity, identityIndex) =>
         parsePlannedIdentity(
           identity,
@@ -484,12 +522,68 @@ function parseCandidate(
           identityIndex,
         ),
       )
-    : listingItems.flatMap((item) =>
-        derivePlannedIdentities(proposedProductSku, item),
-      );
+    : deriveCandidatePlannedIdentities(proposedProductSku, listingItems);
   if (incremental) validateIncrementalEvidence(value, candidate);
+  if (itemOrderCorrelation) {
+    validateItemOrderCorrelationEvidence(value, candidate);
+  }
   validateCandidate(candidate);
   return candidate;
+}
+
+function validateItemOrderCorrelationEvidence(
+  value: Record<string, unknown>,
+  candidate: ProductMaterializationCandidate,
+): void {
+  if (
+    text(value, 'classification') !== 'DETERMINISTIC_HIGH' ||
+    text(value, 'identityBasis') !==
+      'EXACT_ITEM_TO_ITEM_ORDER_CORRELATION_TO_SINGLE_OLIST_PRODUCT_ID'
+  ) {
+    fail(`${candidate.productCandidateId} has an unapproved classification basis.`);
+  }
+  if (
+    candidate.evidenceHigh.length !== 1 ||
+    candidate.evidenceHigh[0] !== 'ORDER_PRODUCT_ID' ||
+    candidate.listingItems.some(({ evidence }) => evidence !== 'ORDER_PRODUCT_ID')
+  ) {
+    fail(`${candidate.productCandidateId} contains unapproved evidence.`);
+  }
+
+  const rawItems = array(value, 'listingItems');
+  const listingCandidateIds = new Set<string>();
+  for (const [index, rawItem] of rawItems.entries()) {
+    if (!isRecord(rawItem)) {
+      fail(`${candidate.productCandidateId} has invalid listing evidence.`);
+    }
+    const listingCandidateId = text(rawItem, 'candidateId');
+    addUnique(listingCandidateIds, listingCandidateId, 'listing candidate id');
+    const ordersUsed = array(rawItem, 'ordersUsed');
+    if (
+      ordersUsed.length < 2 ||
+      integer(rawItem, 'correlatedOrderCount') !== ordersUsed.length ||
+      integer(rawItem, 'conflictingOrderCount') !== 0
+    ) {
+      fail(`${candidate.productCandidateId} has insufficient order evidence.`);
+    }
+    const listing = candidate.listingItems[index]!;
+    const mlOrderIds = new Set<string>();
+    const olistOrderIds = new Set<string>();
+    for (const order of ordersUsed) {
+      if (!isRecord(order)) {
+        fail(`${candidate.productCandidateId} has invalid order evidence.`);
+      }
+      addUnique(mlOrderIds, text(order, 'mlOrderId'), 'ML evidence order');
+      addUnique(
+        olistOrderIds,
+        text(order, 'olistOrderId'),
+        'Olist evidence order',
+      );
+      if (text(order, 'olistProductId') !== listing.olistProductId) {
+        fail(`${candidate.productCandidateId} has divergent Olist evidence.`);
+      }
+    }
+  }
 }
 
 function parsePlannedIdentity(
@@ -683,8 +777,10 @@ function validateCandidate(candidate: ProductMaterializationCandidate): void {
       fail(`${candidate.productCandidateId} contains unapproved evidence.`);
     }
     validateHistoricalCanonicalKey(candidate);
-  } else {
+  } else if (candidate.classification === 'PROMOTABLE_TO_HIGH') {
     validateIncrementalCanonicalKey(candidate);
+  } else {
+    validateItemOrderCorrelationCanonicalKey(candidate);
   }
 
   for (const item of candidate.listingItems) {
@@ -748,11 +844,40 @@ function validateOlistCanonicalKey(
   }
 }
 
+function validateItemOrderCorrelationCanonicalKey(
+  candidate: ProductMaterializationCandidate,
+): void {
+  const [first] = candidate.listingItems;
+  const expectedSku = `PRD-OLIST-${first!.account}-${first!.olistProductId}`;
+  if (
+    candidate.proposedProductSku !== expectedSku ||
+    candidate.groupKey !== `${first!.account}:OLIST:${first!.olistProductId}` ||
+    candidate.accounts.length !== 1 ||
+    candidate.accounts[0] !== first!.account ||
+    candidate.listingItems.some(
+      (item) =>
+        item.account !== first!.account ||
+        item.businessAccountId !== first!.businessAccountId ||
+        item.olistProductId !== first!.olistProductId,
+    ) ||
+    Object.keys(candidate.olistProductIds).length !== 1 ||
+    candidate.olistProductIds[first!.account]?.length !== 1 ||
+    candidate.olistProductIds[first!.account]?.[0] !== first!.olistProductId ||
+    (candidate.action === 'CREATE_PRODUCT_AND_LINK' &&
+      candidate.proposedProductId !== null) ||
+    (candidate.action === 'REUSE_HIGH_PRODUCT_AND_LINK' &&
+      candidate.proposedProductId === null)
+  ) {
+    fail(`${candidate.productCandidateId} has an invalid grouped Olist canonical key.`);
+  }
+}
+
 function validatePlannedIdentities(
   candidate: ProductMaterializationCandidate,
 ): void {
-  const expected = candidate.listingItems.flatMap((item) =>
-    derivePlannedIdentities(candidate.proposedProductSku, item),
+  const expected = deriveCandidatePlannedIdentities(
+    candidate.proposedProductSku,
+    candidate.listingItems,
   );
   if (candidate.plannedIdentities.length !== expected.length) {
     fail(`${candidate.productCandidateId} has incomplete planned identities.`);
@@ -1089,6 +1214,33 @@ function derivePlannedIdentities(
       existingIdentityId: null,
     },
   ];
+}
+
+function deriveCandidatePlannedIdentities(
+  candidateSku: string,
+  items: ProductMaterializationListingItem[],
+): PlannedExternalIdentity[] {
+  const identities = items.flatMap((item) =>
+    derivePlannedIdentities(candidateSku, item),
+  );
+  const unique = new Map<string, PlannedExternalIdentity>();
+  for (const identity of identities) {
+    const key = externalIdentityKey(identity);
+    const existing = unique.get(key);
+    if (existing && !samePlannedIdentity(existing, identity)) {
+      if (
+        existing.provider === ProductIdentityProvider.OLIST &&
+        existing.sellerSku === identity.sellerSku &&
+        existing.marketplaceListingItemId === null &&
+        identity.marketplaceListingItemId === null
+      ) {
+        continue;
+      }
+      fail(`External identity ${key} has divergent candidate snapshots.`);
+    }
+    unique.set(key, identity);
+  }
+  return [...unique.values()];
 }
 
 export function externalIdentityKey(identity: {
