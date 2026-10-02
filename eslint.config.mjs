@@ -12,6 +12,8 @@ export default defineConfig([
     },
   },
   globalIgnores([
+    ".agents/**",
+    ".codex/**",
     ".next/**",
     "apps/api/coverage/**",
     "apps/api/dist/**",
