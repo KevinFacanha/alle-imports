@@ -9,6 +9,7 @@ import { DailySellerMetricsQueryService } from './application/daily-seller-metri
 import { GeFinanceImportService } from './application/gefinance-import.service.js';
 import { MercadoLivreMetricsReconciliationService } from './application/mercado-livre-metrics-reconciliation.service.js';
 import { MlbSalesAbcService } from './application/mlb-sales-abc.service.js';
+import { NoSaleListingsService } from './application/no-sale-listings.service.js';
 import { ProductIntelligenceService } from './application/product-intelligence.service.js';
 import { ProductSalesAbcService } from './application/product-sales-abc.service.js';
 import { SellerBiMetricResolver } from './application/seller-bi-metric.resolver.js';
@@ -36,6 +37,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
     MlbSalesAbcService,
+    NoSaleListingsService,
     ProductIntelligenceService,
     ProductSalesAbcService,
     SellerBiMetricResolver,
@@ -52,6 +54,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     GeFinanceImportService,
     MercadoLivreMetricsReconciliationService,
     MlbSalesAbcService,
+    NoSaleListingsService,
     ProductIntelligenceService,
     ProductSalesAbcService,
     SellerBiMetricResolver,

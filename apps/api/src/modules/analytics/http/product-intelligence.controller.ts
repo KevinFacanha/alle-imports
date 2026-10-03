@@ -1,17 +1,23 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 
 import {
-  ProductIntelligenceAlertsResponse,
+  NoSaleListingsResponse,
+  NoSaleListingsService,
+} from '../application/no-sale-listings.service.js';
+
+import {
   ProductIntelligenceComparisonResponse,
   ProductIntelligenceProductsResponse,
   ProductIntelligenceRankingsResponse,
   ProductIntelligenceService,
 } from '../application/product-intelligence.service.js';
+import { NoSaleListingsQueryDto } from './no-sale-listings-query.dto.js';
 
 @Controller('analytics/product-intelligence')
 export class ProductIntelligenceController {
   constructor(
     private readonly productIntelligence: ProductIntelligenceService,
+    private readonly noSaleListings: NoSaleListingsService,
   ) {}
 
   @Get('products')
@@ -30,7 +36,9 @@ export class ProductIntelligenceController {
   }
 
   @Get('alerts/no-sale')
-  findNoSaleAlerts(): Promise<ProductIntelligenceAlertsResponse> {
-    return this.productIntelligence.findNoSaleAlerts();
+  findNoSaleAlerts(
+    @Query() query: NoSaleListingsQueryDto,
+  ): Promise<NoSaleListingsResponse> {
+    return this.noSaleListings.find(query);
   }
 }

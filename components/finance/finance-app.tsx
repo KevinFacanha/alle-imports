@@ -11,12 +11,21 @@ import { History } from "@/features/history/components/history"
 import { Integrations } from "@/features/integrations/components/integrations"
 import { MarketIntelligence } from "@/features/market-intelligence/components/market-intelligence"
 import { Operation } from "@/features/operation/components/operation"
-import { MlbAbcPage } from "@/features/product-intelligence/components/mlb-abc-page"
+import {
+  ProductIntelligencePage,
+  type ProductIntelligenceSection,
+} from "@/features/product-intelligence/components/product-intelligence-page"
 import { initialChatMessages, mockAssistantResponse } from "@/mocks/chat-messages"
 import type { ChatMessage } from "@/types/chat-messages"
 import type { View } from "@/types/navigation"
 
-export function FinanceApp({ initialView = "assistente" }: { initialView?: View }) {
+export function FinanceApp({
+  initialView = "assistente",
+  initialProductIntelligenceSection = "no-sale",
+}: {
+  initialView?: View
+  initialProductIntelligenceSection?: ProductIntelligenceSection
+}) {
   const [view, setView] = useState<View>(initialView)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [input, setInput] = useState("")
@@ -43,7 +52,7 @@ export function FinanceApp({ initialView = "assistente" }: { initialView?: View 
   const activeFeature = {
     assistente: <Assistant input={input} setInput={setInput} messages={messages} ask={ask} />,
     dashboard: <Dashboard />,
-    "product-intelligence": <MlbAbcPage />,
+    "product-intelligence": <ProductIntelligencePage initialSection={initialProductIntelligenceSection} />,
     operacao: <Operation />,
     alertas: <Alerts />,
     aprovacoes: <Approvals approved={approved} setApproved={setApproved} />,
