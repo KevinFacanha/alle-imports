@@ -1,5 +1,6 @@
-import { plainToInstance, Type } from 'class-transformer';
+import { plainToInstance, Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -33,6 +34,15 @@ export class EnvironmentVariables {
 
   @IsTimeZone()
   BUSINESS_TIMEZONE = 'America/Sao_Paulo';
+
+  @Transform(({ value }) => {
+    if (value === undefined) return false;
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  MARKETPLACE_ORDER_SYNC_SCHEDULER_ENABLED = false;
 
   @IsString()
   @IsNotEmpty()

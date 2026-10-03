@@ -14,7 +14,7 @@ export interface MlbSalesAbcFilters {
 
 export interface MlbSalesAbcItem {
   mlb: string
-  title?: string | null
+  title: string | null
   account: string
   salesCount: number
   unitsSold: number
@@ -35,5 +35,7 @@ export interface MlbSalesAbcReport {
   totalUnits: number
   totalGrossRevenue: string
   totalMlbs: number
+  lastUpdatedAt: string | null
+  lastSyncedAt: string | null
   mlbs: MlbSalesAbcItem[]
 }

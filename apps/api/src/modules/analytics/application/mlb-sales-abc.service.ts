@@ -20,6 +20,7 @@ interface DecimalLike {
 
 export interface MlbSalesAbcSourceItem {
   externalListingId: string;
+  listingTitle?: string | null;
   quantity: number;
   unitPrice: DecimalLike;
   grossAmount?: DecimalLike;
@@ -34,6 +35,7 @@ export interface MlbSalesAbcSourceItem {
 
 export interface MlbSalesAbcItem {
   mlb: string;
+  title: string | null;
   account: string;
   salesCount: number;
   unitsSold: number;
@@ -54,10 +56,20 @@ export interface MlbSalesAbcReport {
   totalUnits: number;
   totalGrossRevenue: string;
   totalMlbs: number;
+  lastUpdatedAt: string | null;
+  lastSyncedAt: string | null;
   mlbs: MlbSalesAbcItem[];
 }
 
 export interface MlbSalesAbcRequest {
+  start?: string;
+  end?: string;
+  days?: 30 | 60 | 90;
+  scope: MlbSalesAbcScope;
+  metric: MlbSalesAbcMetric;
+}
+
+interface ResolvedMlbSalesAbcRequest {
   start: string;
   end: string;
   scope: MlbSalesAbcScope;
@@ -76,21 +88,78 @@ export class MlbSalesAbcService {
   }
 
   async find(request: MlbSalesAbcRequest): Promise<MlbSalesAbcReport> {
-    const start = localDateToUtc(request.start, this.businessTimeZone, 'start');
-    const end = localDateToUtc(request.end, this.businessTimeZone, 'end');
+    const resolved = resolveMlbAbcPeriod(request, this.businessTimeZone);
+    const start = localDateToUtc(resolved.start, this.businessTimeZone, 'start');
+    const end = localDateToUtc(resolved.end, this.businessTimeZone, 'end');
     if (start >= end) {
       throw new BadRequestException('start must be earlier than end.');
     }
 
     const accountCodes =
-      request.scope === MlbSalesAbcScope.Consolidated
+      resolved.scope === MlbSalesAbcScope.Consolidated
         ? [...INCLUDED_ACCOUNTS]
-        : [request.scope];
-    const items = await this.database.marketplaceOrderItem.findMany({
-      where: {
-        marketplaceOrder: {
-          is: {
-            soldAt: { gte: start, lt: end },
+        : [resolved.scope];
+    const [items, latestOrder, latestCompletedRun] = await Promise.all([
+      this.database.marketplaceOrderItem.findMany({
+        where: {
+          marketplaceOrder: {
+            is: {
+              soldAt: { gte: start, lt: end },
+              marketplaceAccount: {
+                is: {
+                  marketplace: Marketplace.MERCADO_LIVRE,
+                  businessAccount: { is: { code: { in: accountCodes } } },
+                },
+              },
+            },
+          },
+        },
+        select: {
+          externalListingId: true,
+          quantity: true,
+          unitPrice: true,
+          marketplaceOrder: {
+            select: {
+              id: true,
+              marketplaceAccount: {
+                select: {
+                  businessAccount: { select: { code: true } },
+                },
+              },
+            },
+          },
+        },
+      }),
+      this.database.marketplaceOrder.aggregate({
+        where: {
+          marketplaceAccount: {
+            is: {
+              marketplace: Marketplace.MERCADO_LIVRE,
+              businessAccount: { is: { code: { in: accountCodes } } },
+            },
+          },
+        },
+        _max: { updatedAt: true },
+      }),
+      this.database.marketplaceOrderBackfillRun.aggregate({
+        where: {
+          status: 'COMPLETED',
+          marketplaceAccount: {
+            is: {
+              marketplace: Marketplace.MERCADO_LIVRE,
+              businessAccount: { is: { code: { in: accountCodes } } },
+            },
+          },
+        },
+        _max: { completedAt: true },
+      }),
+    ]);
+    const listingIds = [...new Set(items.map(({ externalListingId }) => externalListingId))];
+    const listings = listingIds.length === 0
+      ? []
+      : await this.database.marketplaceListing.findMany({
+          where: {
+            externalListingId: { in: listingIds },
             marketplaceAccount: {
               is: {
                 marketplace: Marketplace.MERCADO_LIVRE,
@@ -98,39 +167,53 @@ export class MlbSalesAbcService {
               },
             },
           },
-        },
-      },
-      select: {
-        externalListingId: true,
-        quantity: true,
-        unitPrice: true,
-        marketplaceOrder: {
           select: {
-            id: true,
+            externalListingId: true,
+            title: true,
             marketplaceAccount: {
               select: {
                 businessAccount: { select: { code: true } },
               },
             },
           },
-        },
-      },
+        });
+    const titlesByAccountAndMlb = new Map(
+      listings.flatMap((listing) => {
+        const account = listing.marketplaceAccount.businessAccount?.code;
+        return account
+          ? [[listingKey(account, listing.externalListingId), listing.title] as const]
+          : [];
+      }),
+    );
+    const titledItems = items.map((item) => {
+      const account = item.marketplaceOrder.marketplaceAccount.businessAccount?.code;
+      return {
+        ...item,
+        listingTitle: account
+          ? titlesByAccountAndMlb.get(listingKey(account, item.externalListingId)) ?? null
+          : null,
+      };
     });
 
-    return calculateMlbSalesAbc({
-      ...request,
-      timezone: this.businessTimeZone,
-      items,
-    });
+    return {
+      ...calculateMlbSalesAbc({
+        ...resolved,
+        timezone: this.businessTimeZone,
+        items: titledItems,
+      }),
+      lastUpdatedAt: latestOrder._max.updatedAt?.toISOString() ?? null,
+      lastSyncedAt: latestCompletedRun._max.completedAt?.toISOString() ?? null,
+    };
   }
 }
 
-export function calculateMlbSalesAbc(input: MlbSalesAbcRequest & {
+export function calculateMlbSalesAbc(input: ResolvedMlbSalesAbcRequest & {
   timezone: string;
   items: MlbSalesAbcSourceItem[];
-}): MlbSalesAbcReport {
+}): Omit<MlbSalesAbcReport, 'lastUpdatedAt' | 'lastSyncedAt'> {
   const byMlb = new Map<string, {
     accounts: Set<string>;
+    titlesByAccount: Map<string, string | null>;
     orderIds: Set<string>;
     units: number;
     grossRevenue: Prisma.Decimal;
@@ -149,11 +232,13 @@ export function calculateMlbSalesAbc(input: MlbSalesAbcRequest & {
     );
     const aggregate = byMlb.get(item.externalListingId) ?? {
       accounts: new Set<string>(),
+      titlesByAccount: new Map<string, string | null>(),
       orderIds: new Set<string>(),
       units: 0,
       grossRevenue: new Prisma.Decimal(0),
     };
     aggregate.accounts.add(account);
+    aggregate.titlesByAccount.set(account, item.listingTitle ?? null);
     aggregate.orderIds.add(item.marketplaceOrder.id);
     aggregate.units += item.quantity;
     aggregate.grossRevenue = aggregate.grossRevenue.plus(grossRevenue);
@@ -183,6 +268,10 @@ export function calculateMlbSalesAbc(input: MlbSalesAbcRequest & {
     cumulative = cumulative.plus(value);
     return {
       mlb,
+      title:
+        [...aggregate.titlesByAccount.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .find(([, title]) => title !== null)?.[1] ?? null,
       account: [...aggregate.accounts].sort().join(','),
       salesCount: aggregate.orderIds.size,
       unitsSold: aggregate.units,
@@ -205,6 +294,44 @@ export function calculateMlbSalesAbc(input: MlbSalesAbcRequest & {
     totalGrossRevenue: money(totalGrossRevenue),
     totalMlbs: mlbs.length,
     mlbs,
+  };
+}
+
+function listingKey(account: string, externalListingId: string): string {
+  return `${account}\u0000${externalListingId}`;
+}
+
+export function resolveMlbAbcPeriod(
+  request: MlbSalesAbcRequest,
+  timezone: string,
+  now = new Date(),
+): ResolvedMlbSalesAbcRequest {
+  if (request.days !== undefined) {
+    if (request.start !== undefined || request.end !== undefined) {
+      throw new BadRequestException(
+        'days cannot be combined with start or end.',
+      );
+    }
+    const today = datePartsInTimeZone(now, timezone);
+    const end = addCivilDays(today, 1);
+    const start = addCivilDays(end, -request.days);
+    return {
+      start: formatLocalDate(start),
+      end: formatLocalDate(end),
+      scope: request.scope,
+      metric: request.metric,
+    };
+  }
+  if (request.start === undefined || request.end === undefined) {
+    throw new BadRequestException(
+      'start and end are required when days is absent.',
+    );
+  }
+  return {
+    start: request.start,
+    end: request.end,
+    scope: request.scope,
+    metric: request.metric,
   };
 }
 
@@ -243,6 +370,28 @@ interface LocalDateParts {
   year: number;
   month: number;
   day: number;
+}
+
+function addCivilDays(
+  parts: Pick<LocalDateParts, 'year' | 'month' | 'day'>,
+  days: number,
+): LocalDateParts {
+  const result = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day + days),
+  );
+  return {
+    year: result.getUTCFullYear(),
+    month: result.getUTCMonth() + 1,
+    day: result.getUTCDate(),
+  };
+}
+
+function formatLocalDate(parts: LocalDateParts): string {
+  return [
+    String(parts.year).padStart(4, '0'),
+    String(parts.month).padStart(2, '0'),
+    String(parts.day).padStart(2, '0'),
+  ].join('-');
 }
 
 function localDateToUtc(

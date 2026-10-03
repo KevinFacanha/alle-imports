@@ -27,7 +27,7 @@ import { withMercadoLivreRetry } from '../mercado-livre/mercado-livre-orders-ret
 
 const DAY_MS = 86_400_000;
 const DEFAULT_PAGE_SIZE = 50;
-const EXECUTION_LEASE_MS = 15 * 60 * 1_000;
+export const EXECUTION_LEASE_MS = 30 * 60 * 1_000;
 
 export interface MarketplaceOrderBackfillOptions {
   account: MercadoLivreAccountAlias;
@@ -68,6 +68,11 @@ export interface MarketplaceOrderBackfillSummary {
   ordersProcessed: number;
   itemsMapped: number;
   itemsUnmapped: number;
+  ordersCreated: number;
+  ordersUpdated: number;
+  itemsCreated: number;
+  itemsUpdated: number;
+  recoveredRunId?: string;
 }
 
 export type MarketplaceOrderBackfillErrorCode =
@@ -145,6 +150,7 @@ export class MarketplaceOrderBackfillService {
       normalized.dateTo,
       normalized.chunkDays,
     );
+    const recoveredRunId = await this.recoverStaleRun(account.id);
     const executionId = randomUUID();
     let run: { id: string };
     try {
@@ -181,7 +187,7 @@ export class MarketplaceOrderBackfillService {
       throw error;
     }
 
-    return this.processRun(
+    const summary = await this.processRun(
       run.id,
       normalized.account,
       account,
@@ -190,6 +196,7 @@ export class MarketplaceOrderBackfillService {
       normalized.maxAttempts,
       normalized.stopAfterChunks,
     );
+    return recoveredRunId ? { ...summary, recoveredRunId } : summary;
   }
 
   async resume(
@@ -231,16 +238,16 @@ export class MarketplaceOrderBackfillService {
     }
 
     const executionId = randomUUID();
-    const staleBefore = new Date(Date.now() - EXECUTION_LEASE_MS);
     const acquired = await this.database.marketplaceOrderBackfillRun.updateMany({
       where: {
         id: run.id,
-        status: { not: MarketplaceOrderBackfillStatus.COMPLETED },
-        OR: [
-          { executionId: null },
-          { heartbeatAt: null },
-          { heartbeatAt: { lt: staleBefore } },
-        ],
+        status: {
+          in: [
+            MarketplaceOrderBackfillStatus.PENDING,
+            MarketplaceOrderBackfillStatus.FAILED,
+          ],
+        },
+        executionId: null,
       },
       data: {
         status: MarketplaceOrderBackfillStatus.RUNNING,
@@ -285,6 +292,7 @@ export class MarketplaceOrderBackfillService {
       orderBy: { dateFrom: 'asc' },
     });
     let chunksProcessed = 0;
+    const persistenceCounts = emptyPersistenceCounts();
 
     for (const chunk of chunks) {
       if (
@@ -296,7 +304,7 @@ export class MarketplaceOrderBackfillService {
           executionId,
           MarketplaceOrderBackfillStatus.PENDING,
         );
-        return this.readSummary(runId, alias);
+        return this.readSummary(runId, alias, persistenceCounts);
       }
 
       await this.database.marketplaceOrderBackfillChunk.update({
@@ -312,16 +320,19 @@ export class MarketplaceOrderBackfillService {
       });
 
       try {
-        await this.processChunk(
-          runId,
-          chunk.id,
-          chunk.dateFrom,
-          chunk.dateTo,
-          chunk.nextOffset,
-          account,
-          executionId,
-          maxRps,
-          maxAttempts,
+        addPersistenceCounts(
+          persistenceCounts,
+          await this.processChunk(
+            runId,
+            chunk.id,
+            chunk.dateFrom,
+            chunk.dateTo,
+            chunk.nextOffset,
+            account,
+            executionId,
+            maxRps,
+            maxAttempts,
+          ),
         );
         chunksProcessed += 1;
       } catch (error: unknown) {
@@ -353,7 +364,7 @@ export class MarketplaceOrderBackfillService {
       executionId,
       null,
     );
-    return this.readSummary(runId, alias);
+    return this.readSummary(runId, alias, persistenceCounts);
   }
 
   private async processChunk(
@@ -366,8 +377,9 @@ export class MarketplaceOrderBackfillService {
     executionId: string,
     maxRps: number,
     maxAttempts: number,
-  ): Promise<void> {
+  ): Promise<PersistenceCounts> {
     let offset = initialOffset;
+    const chunkCounts = emptyPersistenceCounts();
 
     while (true) {
       const page = await withMercadoLivreRetry(
@@ -415,6 +427,7 @@ export class MarketplaceOrderBackfillService {
         0,
       );
       const mappedItems = itemCount - totals.unmappedItems;
+      addPersistenceCounts(chunkCounts, totals);
 
       if (page.partial) {
         await this.database.marketplaceOrderBackfillChunk.update({
@@ -461,9 +474,76 @@ export class MarketplaceOrderBackfillService {
         }),
       ]);
 
-      if (!page.hasMore) return;
+      if (!page.hasMore) return chunkCounts;
       offset = nextOffset;
     }
+  }
+
+  private async recoverStaleRun(
+    marketplaceAccountId: string,
+    now = new Date(),
+  ): Promise<string | null> {
+    const staleBefore = new Date(now.getTime() - EXECUTION_LEASE_MS);
+    const candidate = await this.database.marketplaceOrderBackfillRun.findFirst({
+      where: {
+        marketplaceAccountId,
+        status: MarketplaceOrderBackfillStatus.RUNNING,
+        OR: [
+          { heartbeatAt: { lt: staleBefore } },
+          { heartbeatAt: null, updatedAt: { lt: staleBefore } },
+        ],
+      },
+      orderBy: { updatedAt: 'asc' },
+      select: {
+        id: true,
+        executionId: true,
+        heartbeatAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!candidate) return null;
+
+    const observedLeaseAt = candidate.heartbeatAt ?? candidate.updatedAt;
+    const reason =
+      `Recovered stale RUNNING lease after ${EXECUTION_LEASE_MS / 60_000} minutes; ` +
+      `last lease activity was ${observedLeaseAt.toISOString()}.`;
+    const recovered = await this.database.marketplaceOrderBackfillRun.updateMany({
+      where: {
+        id: candidate.id,
+        marketplaceAccountId,
+        status: MarketplaceOrderBackfillStatus.RUNNING,
+        executionId: candidate.executionId,
+        heartbeatAt: candidate.heartbeatAt,
+        updatedAt: candidate.updatedAt,
+      },
+      data: {
+        status: MarketplaceOrderBackfillStatus.FAILED,
+        executionId: null,
+        heartbeatAt: null,
+        failedAt: now,
+        lastError: reason,
+      },
+    });
+    if (recovered.count !== 1) return null;
+
+    const failedChunks = await this.database.marketplaceOrderBackfillChunk.updateMany({
+      where: {
+        runId: candidate.id,
+        status: MarketplaceOrderBackfillStatus.RUNNING,
+      },
+      data: {
+        status: MarketplaceOrderBackfillStatus.FAILED,
+        failedAt: now,
+        lastError: reason,
+      },
+    });
+    if (failedChunks.count > 0) {
+      await this.database.marketplaceOrderBackfillRun.update({
+        where: { id: candidate.id },
+        data: { failedChunks: { increment: failedChunks.count } },
+      });
+    }
+    return candidate.id;
   }
 
   private async throttle(maxRps: number): Promise<void> {
@@ -568,6 +648,7 @@ export class MarketplaceOrderBackfillService {
   private async readSummary(
     runId: string,
     account: MercadoLivreAccountAlias,
+    persistenceCounts = emptyPersistenceCounts(),
   ): Promise<MarketplaceOrderBackfillSummary> {
     const run = await this.database.marketplaceOrderBackfillRun.findUniqueOrThrow({
       where: { id: runId },
@@ -585,7 +666,15 @@ export class MarketplaceOrderBackfillService {
       },
     });
     const { id, ...summary } = run;
-    return { runId: id, account, ...summary };
+    return {
+      runId: id,
+      account,
+      ...summary,
+      ordersCreated: persistenceCounts.created,
+      ordersUpdated: persistenceCounts.updated,
+      itemsCreated: persistenceCounts.itemsCreated,
+      itemsUpdated: persistenceCounts.itemsUpdated,
+    };
   }
 }
 

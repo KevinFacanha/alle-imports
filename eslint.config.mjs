@@ -15,6 +15,7 @@ export default defineConfig([
     ".agents/**",
     ".codex/**",
     ".next/**",
+    ".frontend-test-dist/**",
     "apps/api/coverage/**",
     "apps/api/dist/**",
     "apps/api/dist-test/**",

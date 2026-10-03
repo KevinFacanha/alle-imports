@@ -25,7 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useMlbSalesAbc } from "@/features/product-intelligence/hooks/use-mlb-sales-abc"
-import { MLB_ABC_PERIODS } from "@/services/mlb-sales-abc"
+import { filterMlbSalesAbcItems } from "@/services/mlb-sales-abc-search"
 import type {
   MlbAbcClass,
   MlbAbcMetric,
@@ -53,16 +53,12 @@ export function MlbAbcPage() {
   const [search, setSearch] = useState("")
   const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR")
   const visibleMlbs = useMemo(
-    () =>
-      abc.report?.mlbs.filter(
-        (item) =>
-          !normalizedSearch ||
-          item.mlb.toLocaleLowerCase("pt-BR").includes(normalizedSearch) ||
-          item.title?.toLocaleLowerCase("pt-BR").includes(normalizedSearch),
-      ) ?? [],
+    () => filterMlbSalesAbcItems(abc.report?.mlbs ?? [], normalizedSearch),
     [abc.report, normalizedSearch],
   )
-  const period = MLB_ABC_PERIODS[abc.filters.period]
+  const period = abc.report
+    ? { start: abc.report.periodStart, end: abc.report.periodEnd }
+    : null
 
   return (
     <section className="space-y-6" aria-labelledby="mlb-abc-title">
@@ -81,7 +77,21 @@ export function MlbAbcPage() {
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left sm:text-right">
           <p className="text-[10px] font-bold uppercase tracking-[.12em] text-slate-400">Janela analisada</p>
           <p className="mt-1 text-xs font-bold text-slate-700">
-            {formatDate(period.start)} <span className="mx-1 text-slate-300">→</span> {formatDate(period.end)}
+            {period ? (
+              <>{formatDate(period.start)} <span className="mx-1 text-slate-300">→</span> {formatExclusiveEnd(period.end)}</>
+            ) : `Últimos ${abc.filters.period} dias`}
+          </p>
+          <p className="mt-1 text-[10px] font-semibold text-slate-400" aria-live="polite">
+            {abc.isRefreshing
+              ? "Atualizando…"
+              : abc.report?.lastUpdatedAt
+                ? `Pedidos alterados em ${formatDateTime(abc.report.lastUpdatedAt)}`
+                : "Aguardando primeira sincronização"}
+          </p>
+          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">
+            {abc.report?.lastSyncedAt
+              ? `Sync concluído em ${formatDateTime(abc.report.lastSyncedAt)}`
+              : "Nenhum sync concluído"}
           </p>
         </div>
       </div>
@@ -380,6 +390,26 @@ function scopeLabel(scope: MlbSalesAbcReport["scope"]): string {
 function formatDate(value: string): string {
   const [year, month, day] = value.split("-")
   return `${day}/${month}/${year}`
+}
+
+function formatExclusiveEnd(value: string): string {
+  const [year, month, day] = value.split("-").map(Number)
+  const inclusive = new Date(Date.UTC(year, month - 1, day - 1))
+  return formatDate([
+    inclusive.getUTCFullYear(),
+    String(inclusive.getUTCMonth() + 1).padStart(2, "0"),
+    String(inclusive.getUTCDate()).padStart(2, "0"),
+  ].join("-"))
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "—"
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date)
 }
 
 function formatCurrency(value: string): string {

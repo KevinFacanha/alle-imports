@@ -1,8 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { getMlbSalesAbc } from "@/services/mlb-sales-abc"
+import { startMlbAbcAutoRefresh } from "@/services/mlb-sales-abc-refresh"
 import type {
   MlbAbcMetric,
   MlbAbcPeriod,
@@ -16,6 +17,7 @@ export interface MlbSalesAbcViewModel {
   report: MlbSalesAbcReport | null
   state: "loading" | "error" | "empty" | "success"
   errorMessage: string | null
+  isRefreshing: boolean
   setPeriod: (period: MlbAbcPeriod) => void
   setScope: (scope: MlbAbcScope) => void
   setMetric: (metric: MlbAbcMetric) => void
@@ -34,30 +36,62 @@ export function useMlbSalesAbc(): MlbSalesAbcViewModel {
   const [requestState, setRequestState] = useState<"loading" | "success" | "error">("loading")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const requestSequence = useRef(0)
+  const requestController = useRef<AbortController | null>(null)
 
-  useEffect(() => {
+  const fetchReport = useCallback(async (
+    currentFilters: MlbSalesAbcFilters,
+    options: { initial: boolean },
+  ) => {
+    const sequence = ++requestSequence.current
+    requestController.current?.abort()
     const controller = new AbortController()
-    setRequestState("loading")
-    setReport(null)
-    setErrorMessage(null)
+    requestController.current = controller
+    if (options.initial) {
+      setRequestState("loading")
+      setReport(null)
+      setErrorMessage(null)
+    } else {
+      setIsRefreshing(true)
+    }
 
-    getMlbSalesAbc(filters, controller.signal)
-      .then((response) => {
-        setReport(response)
-        setRequestState("success")
-      })
-      .catch((error: unknown) => {
-        if (isAbort(error)) return
+    try {
+      const response = await getMlbSalesAbc(currentFilters, controller.signal)
+      if (sequence !== requestSequence.current) return
+      setReport(response)
+      setRequestState("success")
+      setErrorMessage(null)
+    } catch (error: unknown) {
+      if (isAbort(error) || sequence !== requestSequence.current) return
+      if (options.initial) {
         setRequestState("error")
         setErrorMessage(
           error instanceof Error
             ? error.message
             : "Não foi possível carregar a Curva ABC por MLB.",
         )
-      })
+      }
+    } finally {
+      if (sequence === requestSequence.current) setIsRefreshing(false)
+    }
+  }, [])
 
-    return () => controller.abort()
-  }, [filters, retryKey])
+  useEffect(() => {
+    const initialRequest = window.setTimeout(() => {
+      void fetchReport(filters, { initial: true })
+    }, 0)
+    return () => {
+      window.clearTimeout(initialRequest)
+      requestController.current?.abort()
+      requestSequence.current += 1
+    }
+  }, [fetchReport, filters, retryKey])
+
+  useEffect(() => startMlbAbcAutoRefresh({
+    refresh: () => void fetchReport(filters, { initial: false }),
+    visibility: document,
+  }), [fetchReport, filters])
 
   const updateFilters = useCallback((update: Partial<MlbSalesAbcFilters>) => {
     setFilters((current) => ({ ...current, ...update }))
@@ -75,6 +109,7 @@ export function useMlbSalesAbc(): MlbSalesAbcViewModel {
             ? "success"
             : "empty",
     errorMessage,
+    isRefreshing,
     setPeriod: (period) => updateFilters({ period }),
     setScope: (scope) => updateFilters({ scope }),
     setMetric: (metric) => updateFilters({ metric }),

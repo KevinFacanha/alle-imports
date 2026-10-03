@@ -16,6 +16,7 @@ import {
 import { MarketplaceOrdersProvider } from '../domain/marketplace-orders.provider.js';
 import { MercadoLivreClientError } from '../mercado-livre/mercado-livre.client.js';
 import {
+  EXECUTION_LEASE_MS,
   MarketplaceOrderBackfillError,
   MarketplaceOrderBackfillService,
 } from './marketplace-order-backfill.service.js';
@@ -175,6 +176,47 @@ describe('MarketplaceOrderBackfillService', () => {
     assert.equal(estimate.totalChunks, 3);
     assert.equal(database.runs.size, 0);
   });
+
+  it('recovers a stale RUNNING lease, preserves its history and starts a new run', async () => {
+    const database = new BackfillDatabase();
+    const staleRunId = database.seedRunningRun(
+      C1_ID,
+      new Date(Date.now() - EXECUTION_LEASE_MS - 60_000),
+    );
+    const provider = new BackfillProvider(() => database.orders.size);
+    provider.enqueue(page([], 0, null, 0));
+
+    const result = await makeService(database, provider).start(options('c1'));
+    const staleRun = database.runs.get(staleRunId)!;
+
+    assert.equal(result.recoveredRunId, staleRunId);
+    assert.equal(staleRun.status, MarketplaceOrderBackfillStatus.FAILED);
+    assert.equal(staleRun.executionId, null);
+    assert.match(String(staleRun.lastError), /Recovered stale RUNNING lease/);
+    assert.ok(staleRun.failedAt instanceof Date);
+    assert.equal(result.status, MarketplaceOrderBackfillStatus.COMPLETED);
+  });
+
+  it('does not recover a RUNNING lease with a recent heartbeat', async () => {
+    const database = new BackfillDatabase();
+    const runId = database.seedRunningRun(C1_ID, new Date());
+    const service = makeService(
+      database,
+      new BackfillProvider(() => database.orders.size),
+    );
+
+    const recovered = await (
+      service as unknown as {
+        recoverStaleRun: (accountId: string, now: Date) => Promise<string | null>;
+      }
+    ).recoverStaleRun(C1_ID, new Date());
+
+    assert.equal(recovered, null);
+    assert.equal(
+      database.runs.get(runId)?.status,
+      MarketplaceOrderBackfillStatus.RUNNING,
+    );
+  });
 });
 
 class BackfillProvider implements MarketplaceOrdersProvider {
@@ -221,6 +263,9 @@ interface StoredRun extends Record<string, unknown> {
   ordersProcessed: number;
   itemsMapped: number;
   itemsUnmapped: number;
+  updatedAt: Date;
+  failedAt: Date | null;
+  lastError: string | null;
 }
 
 interface StoredChunk extends Record<string, unknown> {
@@ -288,6 +333,9 @@ class BackfillDatabase {
         ordersProcessed: 0,
         itemsMapped: 0,
         itemsUnmapped: 0,
+        updatedAt: new Date(),
+        failedAt: null,
+        lastError: null,
       };
       this.runs.set(id, run);
       for (const window of data.chunks.create) {
@@ -311,6 +359,8 @@ class BackfillDatabase {
       }
       return { id };
     },
+    findFirst: async (args: RunFindFirstArgs) =>
+      [...this.runs.values()].find((run) => matchesRun(run, args.where)) ?? null,
     findUnique: async (args: IdArgs) => this.runs.get(args.where.id) ?? null,
     findUniqueOrThrow: async (args: IdArgs) => {
       const run = this.runs.get(args.where.id);
@@ -319,7 +369,7 @@ class BackfillDatabase {
     },
     updateMany: async (args: RunUpdateManyArgs) => {
       const run = this.runs.get(args.where.id);
-      if (!run || run.executionId !== null) return { count: 0 };
+      if (!run || !matchesRun(run, args.where)) return { count: 0 };
       applyData(run, args.data);
       return { count: 1 };
     },
@@ -353,7 +403,48 @@ class BackfillDatabase {
       applyData(chunk, args.data);
       return chunk;
     },
+    updateMany: async (args: ChunkUpdateManyArgs) => {
+      let count = 0;
+      for (const chunk of this.chunks.values()) {
+        if (
+          chunk.runId === args.where.runId &&
+          chunk.status === args.where.status
+        ) {
+          applyData(chunk, args.data);
+          count += 1;
+        }
+      }
+      return { count };
+    },
   };
+
+  seedRunningRun(accountId: string, heartbeatAt: Date): string {
+    const id = `stale-${accountId}`;
+    const businessAccountId =
+      accountId === C1_ID ? C1_BUSINESS_ID : C2_BUSINESS_ID;
+    this.runs.set(id, {
+      id,
+      marketplaceAccountId: accountId,
+      businessAccountId,
+      status: MarketplaceOrderBackfillStatus.RUNNING,
+      executionId: '30000000-0000-4000-8000-000000000001',
+      heartbeatAt,
+      maxRps: new Prisma.Decimal(1),
+      maxAttempts: 5,
+      totalChunks: 1,
+      completedChunks: 0,
+      failedChunks: 0,
+      attempts: 0,
+      pagesProcessed: 0,
+      ordersProcessed: 0,
+      itemsMapped: 0,
+      itemsUnmapped: 0,
+      updatedAt: heartbeatAt,
+      failedAt: null,
+      lastError: null,
+    });
+    return id;
+  }
 
   addCatalog(
     accountId: string,
@@ -511,8 +602,15 @@ interface IdArgs { where: { id: string } }
 interface RunUpdateManyArgs extends UpdateArgs {
   where: UpdateArgs['where'] & Record<string, unknown>;
 }
+interface RunFindFirstArgs {
+  where: Record<string, unknown>;
+}
 interface UpdateArgs {
   where: { id: string; executionId?: string };
+  data: Record<string, unknown>;
+}
+interface ChunkUpdateManyArgs {
+  where: { runId: string; status: MarketplaceOrderBackfillStatus };
   data: Record<string, unknown>;
 }
 interface ChunkFindArgs {
@@ -567,6 +665,57 @@ function applyData(
       target[key] = value;
     }
   }
+}
+
+function matchesRun(run: StoredRun, where: Record<string, unknown>): boolean {
+  if (typeof where.id === 'string' && run.id !== where.id) return false;
+  if (
+    typeof where.marketplaceAccountId === 'string' &&
+    run.marketplaceAccountId !== where.marketplaceAccountId
+  ) return false;
+  if (
+    typeof where.status === 'string' &&
+    run.status !== where.status
+  ) return false;
+  if (
+    where.status &&
+    typeof where.status === 'object' &&
+    run.status === (where.status as { not?: MarketplaceOrderBackfillStatus }).not
+  ) return false;
+  const includedStatuses = (
+    where.status as { in?: MarketplaceOrderBackfillStatus[] } | undefined
+  )?.in;
+  if (includedStatuses && !includedStatuses.includes(run.status)) return false;
+  if ('executionId' in where && run.executionId !== where.executionId) return false;
+  if ('heartbeatAt' in where && !sameDate(run.heartbeatAt, where.heartbeatAt)) {
+    return false;
+  }
+  if ('updatedAt' in where && !sameDate(run.updatedAt, where.updatedAt)) {
+    return false;
+  }
+  if (Array.isArray(where.OR)) {
+    const matchesAny = where.OR.some((condition) => {
+      if (!condition || typeof condition !== 'object') return false;
+      const value = condition as Record<string, unknown>;
+      if ('executionId' in value) return run.executionId === value.executionId;
+      if (value.heartbeatAt === null) {
+        if (run.heartbeatAt !== null) return false;
+        const updatedAt = value.updatedAt as { lt?: Date } | undefined;
+        return !updatedAt?.lt || run.updatedAt < updatedAt.lt;
+      }
+      const heartbeat = value.heartbeatAt as { lt?: Date } | undefined;
+      return Boolean(heartbeat?.lt && run.heartbeatAt && run.heartbeatAt < heartbeat.lt);
+    });
+    if (!matchesAny) return false;
+  }
+  return true;
+}
+
+function sameDate(left: unknown, right: unknown): boolean {
+  if (left === null || right === null) return left === right;
+  return left instanceof Date && right instanceof Date
+    ? left.getTime() === right.getTime()
+    : left === right;
 }
 
 function isIncrement(value: unknown): value is { increment: number } {

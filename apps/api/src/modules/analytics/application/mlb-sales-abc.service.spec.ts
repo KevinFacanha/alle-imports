@@ -17,6 +17,7 @@ import {
   calculateMlbSalesAbc,
   MlbSalesAbcService,
   MlbSalesAbcSourceItem,
+  resolveMlbAbcPeriod,
 } from './mlb-sales-abc.service.js';
 
 describe('MlbSalesAbcService', () => {
@@ -34,6 +35,40 @@ describe('MlbSalesAbcService', () => {
     assert.equal(JSON.stringify(database.calls[0]).includes('lte'), false);
   });
 
+  it('resolves dynamic 30/60/90-day windows in America/Sao_Paulo', () => {
+    const nearUtcMidnight = new Date('2026-10-04T01:30:00.000Z');
+
+    assert.deepEqual(
+      [30, 60, 90].map((days) =>
+        resolveMlbAbcPeriod(
+          request({ start: undefined, end: undefined, days: days as 30 | 60 | 90 }),
+          'America/Sao_Paulo',
+          nearUtcMidnight,
+        ),
+      ),
+      [
+        { start: '2026-09-04', end: '2026-10-04', scope: 'C1', metric: 'UNITS' },
+        { start: '2026-08-05', end: '2026-10-04', scope: 'C1', metric: 'UNITS' },
+        { start: '2026-07-06', end: '2026-10-04', scope: 'C1', metric: 'UNITS' },
+      ],
+    );
+  });
+
+  it('queries a dynamic window with inclusive start and exclusive next-day end', async () => {
+    const database = new MlbAbcDatabase([]);
+    const dynamic = resolveMlbAbcPeriod(
+      request({ start: undefined, end: undefined, days: 30 }),
+      'America/Sao_Paulo',
+      new Date('2026-10-03T15:00:00.000Z'),
+    );
+    await service(database).find(dynamic);
+
+    assert.deepEqual(soldAtFilter(database.calls[0]), {
+      gte: new Date('2026-09-04T03:00:00.000Z'),
+      lt: new Date('2026-10-04T03:00:00.000Z'),
+    });
+  });
+
   it('scopes C1, C2 and consolidated reads without filtering order status', async () => {
     const database = new MlbAbcDatabase([]);
     const queryService = service(database);
@@ -48,6 +83,28 @@ describe('MlbSalesAbcService', () => {
     for (const call of database.calls) {
       assert.equal(JSON.stringify(call).includes('normalizedStatus'), false);
     }
+  });
+
+  it('returns the parent listing title by BusinessAccount + MLB and sync timestamps', async () => {
+    const lastUpdatedAt = new Date('2026-10-03T14:00:00.000Z');
+    const lastSyncedAt = new Date('2026-10-03T14:05:00.000Z');
+    const database = new MlbAbcDatabase(
+      [
+        item('MLB1', 'variation-a', 'order-1', 1, '10'),
+        item('MLB1', 'variation-b', 'order-2', 1, '10'),
+        item('MLB2', 'variation-c', 'order-3', 1, '10'),
+      ],
+      [{ externalListingId: 'MLB1', title: 'Anúncio pai', account: 'C1' }],
+      lastUpdatedAt,
+      lastSyncedAt,
+    );
+
+    const result = await service(database).find(request());
+
+    assert.equal(result.mlbs.find(({ mlb }) => mlb === 'MLB1')?.title, 'Anúncio pai');
+    assert.equal(result.mlbs.find(({ mlb }) => mlb === 'MLB2')?.title, null);
+    assert.equal(result.lastUpdatedAt, lastUpdatedAt.toISOString());
+    assert.equal(result.lastSyncedAt, lastSyncedAt.toISOString());
   });
 
   it('rejects invalid or reversed civil periods', async () => {
@@ -90,6 +147,7 @@ describe('calculateMlbSalesAbc', () => {
     assert.equal(report.totalMlbs, 1);
     assert.deepEqual(report.mlbs[0], {
       mlb: 'MLB1',
+      title: null,
       account: 'C1',
       salesCount: 2,
       unitsSold: 6,
@@ -99,6 +157,15 @@ describe('calculateMlbSalesAbc', () => {
       abcClass: 'A',
       rank: 1,
     });
+  });
+
+  it('returns one parent title for all variations of the same MLB', () => {
+    const first = item('MLB1', 'variation-a', 'order-1', 1, '10');
+    const second = item('MLB1', 'variation-b', 'order-2', 1, '10');
+    first.listingTitle = 'Título do anúncio-pai';
+    second.listingTitle = 'Título do anúncio-pai';
+
+    assert.equal(calculate([first, second]).mlbs[0]?.title, 'Título do anúncio-pai');
   });
 
   it('includes every persisted order status', () => {
@@ -221,7 +288,10 @@ function calculate(
   overrides: Partial<Parameters<typeof calculateMlbSalesAbc>[0]> = {},
 ) {
   return calculateMlbSalesAbc({
-    ...request(),
+    start: '2026-09-01',
+    end: '2026-10-01',
+    scope: MlbSalesAbcScope.C1,
+    metric: MlbSalesAbcMetric.Units,
     timezone: 'America/Sao_Paulo',
     items,
     ...overrides,
@@ -273,7 +343,35 @@ class MlbAbcDatabase {
     },
   };
 
-  constructor(private readonly items: MlbSalesAbcSourceItem[]) {}
+  readonly marketplaceOrder = {
+    aggregate: async () => ({ _max: { updatedAt: this.lastUpdatedAt } }),
+  };
+
+  readonly marketplaceOrderBackfillRun = {
+    aggregate: async () => ({ _max: { completedAt: this.lastSyncedAt } }),
+  };
+
+  readonly marketplaceListing = {
+    findMany: async () =>
+      this.listings.map((listing) => ({
+        externalListingId: listing.externalListingId,
+        title: listing.title,
+        marketplaceAccount: {
+          businessAccount: { code: listing.account },
+        },
+      })),
+  };
+
+  constructor(
+    private readonly items: MlbSalesAbcSourceItem[],
+    private readonly listings: Array<{
+      externalListingId: string;
+      title: string | null;
+      account: string;
+    }> = [],
+    private readonly lastUpdatedAt: Date | null = null,
+    private readonly lastSyncedAt: Date | null = null,
+  ) {}
 }
 
 function soldAtFilter(call: unknown): unknown {
