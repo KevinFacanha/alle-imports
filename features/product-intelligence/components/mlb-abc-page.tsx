@@ -3,14 +3,18 @@
 import { useMemo, useState, type ReactNode } from "react"
 import {
   ArrowDown,
+  ArrowDownRight,
+  ArrowUpRight,
   BadgeDollarSign,
   BarChart3,
   Boxes,
   ChartNoAxesCombined,
+  Minus,
   PackageSearch,
   RefreshCw,
   Search,
   ShoppingBag,
+  Sparkles,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -29,6 +33,8 @@ import { filterMlbSalesAbcItems } from "@/services/mlb-sales-abc-search"
 import type {
   MlbAbcClass,
   MlbAbcMetric,
+  MlbAbcMovement,
+  MlbAbcMovementFilter,
   MlbSalesAbcItem,
   MlbSalesAbcReport,
 } from "@/types/mlb-sales-abc"
@@ -51,10 +57,11 @@ const abcDefinitions = [
 export function MlbAbcPage() {
   const abc = useMlbSalesAbc()
   const [search, setSearch] = useState("")
+  const [movementFilter, setMovementFilter] = useState<MlbAbcMovementFilter>("ALL")
   const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR")
   const visibleMlbs = useMemo(
-    () => filterMlbSalesAbcItems(abc.report?.mlbs ?? [], normalizedSearch),
-    [abc.report, normalizedSearch],
+    () => filterMlbSalesAbcItems(abc.report?.mlbs ?? [], normalizedSearch, movementFilter),
+    [abc.report, normalizedSearch, movementFilter],
   )
   const period = abc.report
     ? { start: abc.report.periodStart, end: abc.report.periodEnd }
@@ -131,6 +138,7 @@ export function MlbAbcPage() {
 
       {abc.state === "success" && abc.report && (
         <div className="space-y-6">
+          <MovementSummary report={abc.report} />
           <ExecutiveCards report={abc.report} />
           <AbcSummary report={abc.report} />
           <MlbTable
@@ -138,10 +146,70 @@ export function MlbAbcPage() {
             totalItems={abc.report.mlbs.length}
             metric={abc.filters.metric}
             search={search}
+            movementFilter={movementFilter}
             onSearchChange={setSearch}
+            onMovementFilterChange={setMovementFilter}
           />
         </div>
       )}
+    </section>
+  )
+}
+
+function MovementSummary({ report }: { report: MlbSalesAbcReport }) {
+  const { movementSummary } = report
+  const cards = [
+    {
+      label: "MLBs que caíram",
+      value: movementSummary.declined,
+      detail: "Prioridade máxima",
+      className: "border-rose-200 bg-rose-50/70 text-rose-700",
+    },
+    {
+      label: "MLBs que subiram",
+      value: movementSummary.improved,
+      detail: "Evolução de curva",
+      className: "border-emerald-200 bg-emerald-50/60 text-emerald-700",
+    },
+    {
+      label: "A → B",
+      value: movementSummary.aToB,
+      detail: "Queda",
+      className: "border-rose-100 bg-white text-rose-600",
+    },
+    {
+      label: "A → C",
+      value: movementSummary.aToC,
+      detail: "Queda crítica",
+      className: "border-rose-200 bg-white text-rose-700",
+    },
+    {
+      label: "B → C",
+      value: movementSummary.bToC,
+      detail: "Queda",
+      className: "border-rose-100 bg-white text-rose-600",
+    },
+  ]
+
+  return (
+    <section aria-labelledby="movement-summary-title">
+      <div className="mb-3">
+        <h3 id="movement-summary-title" className="text-sm font-bold text-slate-900">
+          Movimento da curva
+        </h3>
+        <p className="mt-1 text-xs text-slate-400">
+          Comparação com a mesma janela encerrada um dia antes
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {cards.map((card) => (
+          <article key={card.label} className={`rounded-2xl border p-4 shadow-sm ${card.className}`}>
+            <p className="text-xs font-bold">{card.label}</p>
+            <p className="mt-2 text-2xl font-extrabold tracking-tight">{integer.format(card.value)}</p>
+            <p className="mt-1 text-[10px] font-semibold opacity-70">{card.detail}</p>
+          </article>
+        ))}
+      </div>
     </section>
   )
 }
@@ -232,14 +300,26 @@ function MlbTable({
   totalItems,
   metric,
   search,
+  movementFilter,
   onSearchChange,
+  onMovementFilterChange,
 }: {
   items: MlbSalesAbcItem[]
   totalItems: number
   metric: MlbAbcMetric
   search: string
+  movementFilter: MlbAbcMovementFilter
   onSearchChange: (value: string) => void
+  onMovementFilterChange: (value: MlbAbcMovementFilter) => void
 }) {
+  const movementFilters: Array<{ value: MlbAbcMovementFilter; label: string }> = [
+    { value: "ALL", label: "Todos" },
+    { value: "DECLINED", label: "Caiu" },
+    { value: "IMPROVED", label: "Subiu" },
+    { value: "STABLE", label: "Estável" },
+    { value: "NEW", label: "Novos" },
+  ]
+
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/30" aria-labelledby="mlb-ranking-title">
       <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
@@ -249,17 +329,38 @@ function MlbTable({
             Ordenado por {metricLabel(metric).toLowerCase()} · {integer.format(totalItems)} MLBs
           </p>
         </div>
-        <label className="relative block w-full sm:max-w-xs">
-          <span className="sr-only">Buscar por MLB ou título</span>
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <Input
-            type="search"
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Buscar MLB ou título"
-            className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 shadow-none"
-          />
-        </label>
+        <div className="flex w-full flex-col gap-3 sm:max-w-2xl sm:items-end">
+          <div className="flex w-full flex-wrap gap-1 sm:justify-end" aria-label="Filtrar por movimento">
+            {movementFilters.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                aria-pressed={movementFilter === filter.value}
+                onClick={() => onMovementFilterChange(filter.value)}
+                className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition ${
+                  movementFilter === filter.value
+                    ? filter.value === "DECLINED"
+                      ? "bg-rose-600 text-white"
+                      : "bg-[#6254d9] text-white"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <label className="relative block w-full sm:max-w-xs">
+            <span className="sr-only">Buscar por MLB ou título</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <Input
+              type="search"
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="Buscar MLB ou título"
+              className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 shadow-none"
+            />
+          </label>
+        </div>
       </div>
 
       {items.length === 0 ? (
@@ -268,9 +369,12 @@ function MlbTable({
             <div className="mx-auto grid size-11 place-items-center rounded-xl bg-slate-100 text-slate-400">
               <Search size={19} />
             </div>
-            <p className="mt-3 text-sm font-bold text-slate-800">Nenhum resultado para “{search.trim()}”</p>
-            <button className="mt-2 text-xs font-bold text-[#6254d9]" onClick={() => onSearchChange("")}>
-              Limpar busca
+            <p className="mt-3 text-sm font-bold text-slate-800">Nenhum anúncio corresponde aos filtros</p>
+            <button className="mt-2 text-xs font-bold text-[#6254d9]" onClick={() => {
+              onSearchChange("")
+              onMovementFilterChange("ALL")
+            }}>
+              Limpar filtros
             </button>
           </div>
         </div>
@@ -282,6 +386,7 @@ function MlbTable({
               <TableHead className="min-w-52 text-[10px] font-bold uppercase tracking-[.1em] text-slate-400">MLB / anúncio</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-[.1em] text-slate-400">Conta</TableHead>
               <TableHead className="text-center text-[10px] font-bold uppercase tracking-[.1em] text-slate-400">Curva</TableHead>
+              <TableHead className="min-w-44 text-[10px] font-bold uppercase tracking-[.1em] text-slate-400">Movimento</TableHead>
               <TableHead className="text-right text-[10px] font-bold uppercase tracking-[.1em] text-slate-400">Vendas</TableHead>
               <MetricTableHead active={metric === "UNITS"}>Unidades</MetricTableHead>
               <MetricTableHead active={metric === "GROSS_REVENUE"}>Faturamento</MetricTableHead>
@@ -290,8 +395,8 @@ function MlbTable({
           </TableHeader>
           <TableBody>
             {items.map((item) => (
-              <TableRow key={`${item.account}-${item.mlb}`} className="hover:bg-slate-50/70">
-                <TableCell className="px-4 py-3.5 font-bold text-slate-400 sm:px-5">#{item.rank}</TableCell>
+              <TableRow key={`${item.account}-${item.mlb}`} className={item.movement === "DECLINED" ? "bg-rose-50/50 hover:bg-rose-50" : "hover:bg-slate-50/70"}>
+                <TableCell className="px-4 py-3.5 font-bold text-slate-400 sm:px-5">#{item.currentRank}</TableCell>
                 <TableCell className="py-3.5">
                   <span className="block font-bold text-slate-900">{item.mlb}</span>
                   {item.title && <span className="mt-0.5 block max-w-80 truncate text-xs text-slate-400" title={item.title}>{item.title}</span>}
@@ -299,8 +404,11 @@ function MlbTable({
                 <TableCell className="py-3.5 text-xs font-semibold text-slate-500">{formatAccount(item.account)}</TableCell>
                 <TableCell className="py-3.5 text-center">
                   <span className={`inline-grid size-7 place-items-center rounded-lg text-xs font-extrabold ${abcBadgeClass(item.abcClass)}`}>
-                    {item.abcClass}
+                    {item.currentClass}
                   </span>
+                </TableCell>
+                <TableCell className="py-3.5">
+                  <MovementCell item={item} metric={metric} />
                 </TableCell>
                 <TableCell className="py-3.5 text-right font-semibold text-slate-600">{integer.format(item.salesCount)}</TableCell>
                 <TableCell className={`py-3.5 text-right font-semibold ${metric === "UNITS" ? "text-[#6254d9]" : "text-slate-600"}`}>
@@ -322,6 +430,68 @@ function MlbTable({
       )}
     </section>
   )
+}
+
+function MovementCell({ item, metric }: { item: MlbSalesAbcItem; metric: MlbAbcMetric }) {
+  const metricDelta = metric === "UNITS"
+    ? item.unitsDeltaPercent
+    : item.grossRevenueDeltaPercent
+  const visual = movementVisual(item.movement)
+  const Icon = visual.icon
+  const distance = item.previousClass
+    ? Math.abs(classPriority(item.previousClass) - classPriority(item.currentClass))
+    : 0
+  const arrow = item.movement === "DECLINED"
+    ? distance > 1 ? "↓↓" : "↓"
+    : item.movement === "IMPROVED"
+      ? distance > 1 ? "↑↑" : "↑"
+      : "→"
+  const transition = item.previousClass
+    ? `${item.previousClass} → ${item.currentClass} ${arrow}`
+    : "NEW"
+
+  return (
+    <div className={`inline-flex min-w-36 flex-col rounded-xl border px-3 py-2 ${visual.className}`}>
+      <span className="flex items-center gap-1.5 text-xs font-extrabold">
+        <Icon size={14} aria-hidden="true" /> {transition}
+      </span>
+      <span className="mt-1 text-[10px] font-semibold opacity-80">
+        Rank {formatRankDelta(item.rankDelta)} · {metric === "UNITS" ? "unid." : "fat."} {formatSignedPercent(metricDelta)}
+      </span>
+    </div>
+  )
+}
+
+function movementVisual(movement: MlbAbcMovement) {
+  if (movement === "DECLINED") {
+    return { icon: ArrowDownRight, className: "border-rose-200 bg-rose-100/70 text-rose-800" }
+  }
+  if (movement === "IMPROVED") {
+    return { icon: ArrowUpRight, className: "border-emerald-200 bg-emerald-50 text-emerald-700" }
+  }
+  if (movement === "NEW") {
+    return { icon: Sparkles, className: "border-violet-200 bg-violet-50 text-violet-700" }
+  }
+  return { icon: Minus, className: "border-slate-200 bg-slate-50 text-slate-600" }
+}
+
+function classPriority(abcClass: MlbAbcClass): number {
+  if (abcClass === "A") return 0
+  if (abcClass === "B") return 1
+  return 2
+}
+
+function formatRankDelta(value: number | null): string {
+  if (value === null) return "—"
+  if (value > 0) return `↑${integer.format(value)}`
+  if (value < 0) return `↓${integer.format(Math.abs(value))}`
+  return "→0"
+}
+
+function formatSignedPercent(value: number | null): string {
+  if (value === null) return "—"
+  const sign = value > 0 ? "+" : ""
+  return `${sign}${percentage.format(value)}%`
 }
 
 function MetricTableHead({ active, children }: { active: boolean; children: ReactNode }) {

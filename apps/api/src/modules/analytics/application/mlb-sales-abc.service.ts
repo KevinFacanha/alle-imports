@@ -13,6 +13,8 @@ const INCLUDED_ACCOUNTS = ['C1', 'C2'] as const;
 const PERCENTAGE_SCALE = 6;
 
 export type MlbAbcClass = 'A' | 'B' | 'C';
+export type MlbAbcMovement = 'IMPROVED' | 'DECLINED' | 'STABLE' | 'NEW';
+export type MlbAbcClassTransition = `${MlbAbcClass}_TO_${MlbAbcClass}`;
 
 interface DecimalLike {
   toString(): string;
@@ -26,6 +28,7 @@ export interface MlbSalesAbcSourceItem {
   grossAmount?: DecimalLike;
   marketplaceOrder: {
     id: string;
+    soldAt?: Date;
     normalizedStatus?: string;
     marketplaceAccount: {
       businessAccount: { code: string } | null;
@@ -46,9 +49,37 @@ export interface MlbSalesAbcItem {
   rank: number;
 }
 
+export interface MlbSalesAbcMovementItem extends MlbSalesAbcItem {
+  currentClass: MlbAbcClass;
+  previousClass: MlbAbcClass | null;
+  movement: MlbAbcMovement;
+  classTransition: MlbAbcClassTransition | null;
+  currentRank: number;
+  previousRank: number | null;
+  rankDelta: number | null;
+  currentUnits: number;
+  previousUnits: number;
+  unitsDeltaPercent: number | null;
+  currentGrossRevenue: string;
+  previousGrossRevenue: string;
+  grossRevenueDeltaPercent: number | null;
+}
+
+export interface MlbSalesAbcMovementSummary {
+  declined: number;
+  improved: number;
+  stable: number;
+  new: number;
+  aToB: number;
+  aToC: number;
+  bToC: number;
+}
+
 export interface MlbSalesAbcReport {
   periodStart: string;
   periodEnd: string;
+  previousPeriodStart: string;
+  previousPeriodEnd: string;
   timezone: string;
   scope: MlbSalesAbcScope;
   metric: MlbSalesAbcMetric;
@@ -58,8 +89,19 @@ export interface MlbSalesAbcReport {
   totalMlbs: number;
   lastUpdatedAt: string | null;
   lastSyncedAt: string | null;
-  mlbs: MlbSalesAbcItem[];
+  movementSummary: MlbSalesAbcMovementSummary;
+  mlbs: MlbSalesAbcMovementItem[];
 }
+
+type MlbSalesAbcBaseReport = Omit<
+  MlbSalesAbcReport,
+  | 'previousPeriodStart'
+  | 'previousPeriodEnd'
+  | 'lastUpdatedAt'
+  | 'lastSyncedAt'
+  | 'movementSummary'
+  | 'mlbs'
+> & { mlbs: MlbSalesAbcItem[] };
 
 export interface MlbSalesAbcRequest {
   start?: string;
@@ -94,6 +136,17 @@ export class MlbSalesAbcService {
     if (start >= end) {
       throw new BadRequestException('start must be earlier than end.');
     }
+    const previous = shiftResolvedPeriod(resolved, -1);
+    const previousStart = localDateToUtc(
+      previous.start,
+      this.businessTimeZone,
+      'start',
+    );
+    const previousEnd = localDateToUtc(
+      previous.end,
+      this.businessTimeZone,
+      'end',
+    );
 
     const accountCodes =
       resolved.scope === MlbSalesAbcScope.Consolidated
@@ -104,7 +157,7 @@ export class MlbSalesAbcService {
         where: {
           marketplaceOrder: {
             is: {
-              soldAt: { gte: start, lt: end },
+              soldAt: { gte: previousStart, lt: end },
               marketplaceAccount: {
                 is: {
                   marketplace: Marketplace.MERCADO_LIVRE,
@@ -121,6 +174,7 @@ export class MlbSalesAbcService {
           marketplaceOrder: {
             select: {
               id: true,
+              soldAt: true,
               marketplaceAccount: {
                 select: {
                   businessAccount: { select: { code: true } },
@@ -195,12 +249,33 @@ export class MlbSalesAbcService {
       };
     });
 
+    const currentItems = titledItems.filter(({ marketplaceOrder }) => {
+      const soldAt = marketplaceOrder.soldAt;
+      return soldAt !== undefined && soldAt >= start && soldAt < end;
+    });
+    const previousItems = titledItems.filter(({ marketplaceOrder }) => {
+      const soldAt = marketplaceOrder.soldAt;
+      return (
+        soldAt !== undefined && soldAt >= previousStart && soldAt < previousEnd
+      );
+    });
+    const currentReport = calculateMlbSalesAbc({
+      ...resolved,
+      timezone: this.businessTimeZone,
+      items: currentItems,
+    });
+    const previousReport = calculateMlbSalesAbc({
+      ...previous,
+      timezone: this.businessTimeZone,
+      items: previousItems,
+    });
+    const comparison = compareMlbSalesAbc(currentReport, previousReport);
+
     return {
-      ...calculateMlbSalesAbc({
-        ...resolved,
-        timezone: this.businessTimeZone,
-        items: titledItems,
-      }),
+      ...currentReport,
+      previousPeriodStart: previous.start,
+      previousPeriodEnd: previous.end,
+      ...comparison,
       lastUpdatedAt: latestOrder._max.updatedAt?.toISOString() ?? null,
       lastSyncedAt: latestCompletedRun._max.completedAt?.toISOString() ?? null,
     };
@@ -210,7 +285,7 @@ export class MlbSalesAbcService {
 export function calculateMlbSalesAbc(input: ResolvedMlbSalesAbcRequest & {
   timezone: string;
   items: MlbSalesAbcSourceItem[];
-}): Omit<MlbSalesAbcReport, 'lastUpdatedAt' | 'lastSyncedAt'> {
+}): MlbSalesAbcBaseReport {
   const byMlb = new Map<string, {
     accounts: Set<string>;
     titlesByAccount: Map<string, string | null>;
@@ -297,6 +372,87 @@ export function calculateMlbSalesAbc(input: ResolvedMlbSalesAbcRequest & {
   };
 }
 
+export function compareMlbSalesAbc(
+  current: MlbSalesAbcBaseReport,
+  previous: MlbSalesAbcBaseReport,
+): {
+  movementSummary: MlbSalesAbcMovementSummary;
+  mlbs: MlbSalesAbcMovementItem[];
+} {
+  const previousByMlb = new Map(previous.mlbs.map((item) => [item.mlb, item]));
+  const movementSummary: MlbSalesAbcMovementSummary = {
+    declined: 0,
+    improved: 0,
+    stable: 0,
+    new: 0,
+    aToB: 0,
+    aToC: 0,
+    bToC: 0,
+  };
+  const mlbs = current.mlbs.map((item): MlbSalesAbcMovementItem => {
+    const previousItem = previousByMlb.get(item.mlb);
+    const movement = movementFromClasses(item.abcClass, previousItem?.abcClass);
+    const classTransition = previousItem
+      ? (`${previousItem.abcClass}_TO_${item.abcClass}` as MlbAbcClassTransition)
+      : null;
+    if (movement === 'DECLINED') movementSummary.declined += 1;
+    else if (movement === 'IMPROVED') movementSummary.improved += 1;
+    else if (movement === 'STABLE') movementSummary.stable += 1;
+    else movementSummary.new += 1;
+    if (classTransition === 'A_TO_B') movementSummary.aToB += 1;
+    if (classTransition === 'A_TO_C') movementSummary.aToC += 1;
+    if (classTransition === 'B_TO_C') movementSummary.bToC += 1;
+
+    return {
+      ...item,
+      currentClass: item.abcClass,
+      previousClass: previousItem?.abcClass ?? null,
+      movement,
+      classTransition,
+      currentRank: item.rank,
+      previousRank: previousItem?.rank ?? null,
+      rankDelta: previousItem ? previousItem.rank - item.rank : null,
+      currentUnits: item.unitsSold,
+      previousUnits: previousItem?.unitsSold ?? 0,
+      unitsDeltaPercent: deltaPercent(
+        new Prisma.Decimal(item.unitsSold),
+        previousItem ? new Prisma.Decimal(previousItem.unitsSold) : null,
+      ),
+      currentGrossRevenue: item.grossRevenue,
+      previousGrossRevenue: previousItem?.grossRevenue ?? '0.00',
+      grossRevenueDeltaPercent: deltaPercent(
+        new Prisma.Decimal(item.grossRevenue),
+        previousItem ? new Prisma.Decimal(previousItem.grossRevenue) : null,
+      ),
+    };
+  });
+  return { movementSummary, mlbs };
+}
+
+function movementFromClasses(
+  current: MlbAbcClass,
+  previous?: MlbAbcClass,
+): MlbAbcMovement {
+  if (previous === undefined) return 'NEW';
+  const priority: Record<MlbAbcClass, number> = { A: 0, B: 1, C: 2 };
+  if (priority[current] < priority[previous]) return 'IMPROVED';
+  if (priority[current] > priority[previous]) return 'DECLINED';
+  return 'STABLE';
+}
+
+function deltaPercent(
+  current: Prisma.Decimal,
+  previous: Prisma.Decimal | null,
+): number | null {
+  if (previous === null || previous.isZero()) return null;
+  return current
+    .minus(previous)
+    .dividedBy(previous)
+    .mul(100)
+    .toDecimalPlaces(PERCENTAGE_SCALE)
+    .toNumber();
+}
+
 function listingKey(account: string, externalListingId: string): string {
   return `${account}\u0000${externalListingId}`;
 }
@@ -332,6 +488,19 @@ export function resolveMlbAbcPeriod(
     end: request.end,
     scope: request.scope,
     metric: request.metric,
+  };
+}
+
+function shiftResolvedPeriod(
+  period: ResolvedMlbSalesAbcRequest,
+  days: number,
+): ResolvedMlbSalesAbcRequest {
+  return {
+    ...period,
+    start: formatLocalDate(
+      addCivilDays(parseLocalDate(period.start, 'start'), days),
+    ),
+    end: formatLocalDate(addCivilDays(parseLocalDate(period.end, 'end'), days)),
   };
 }
 

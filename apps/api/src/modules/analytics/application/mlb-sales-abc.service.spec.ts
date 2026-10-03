@@ -15,6 +15,10 @@ import {
 } from '../http/mlb-sales-abc-query.dto.js';
 import {
   calculateMlbSalesAbc,
+  compareMlbSalesAbc,
+  MlbAbcClass,
+  MlbAbcClassTransition,
+  MlbAbcMovement,
   MlbSalesAbcService,
   MlbSalesAbcSourceItem,
   resolveMlbAbcPeriod,
@@ -29,7 +33,7 @@ describe('MlbSalesAbcService', () => {
     assert.equal(result.periodStart, '2026-09-01');
     assert.equal(result.periodEnd, '2026-10-01');
     assert.deepEqual(soldAtFilter(database.calls[0]), {
-      gte: new Date('2026-09-01T03:00:00.000Z'),
+      gte: new Date('2026-08-31T03:00:00.000Z'),
       lt: new Date('2026-10-01T03:00:00.000Z'),
     });
     assert.equal(JSON.stringify(database.calls[0]).includes('lte'), false);
@@ -64,9 +68,37 @@ describe('MlbSalesAbcService', () => {
     await service(database).find(dynamic);
 
     assert.deepEqual(soldAtFilter(database.calls[0]), {
-      gte: new Date('2026-09-04T03:00:00.000Z'),
+      gte: new Date('2026-09-03T03:00:00.000Z'),
       lt: new Date('2026-10-04T03:00:00.000Z'),
     });
+  });
+
+  it('compares the same window shifted exactly one Sao Paulo civil day', async () => {
+    const database = new MlbAbcDatabase([
+      item('MLB-PREVIOUS', 'v1', 'o1', 10, '1', undefined, {
+        soldAt: new Date('2026-08-31T12:00:00.000Z'),
+      }),
+      item('MLB-SHARED', 'v2', 'o2', 5, '1', undefined, {
+        soldAt: new Date('2026-09-15T12:00:00.000Z'),
+      }),
+      item('MLB-CURRENT', 'v3', 'o3', 3, '1', undefined, {
+        soldAt: new Date('2026-09-30T12:00:00.000Z'),
+      }),
+    ]);
+
+    const result = await service(database).find(request());
+
+    assert.equal(result.previousPeriodStart, '2026-08-31');
+    assert.equal(result.previousPeriodEnd, '2026-09-30');
+    assert.equal(result.mlbs.some(({ mlb }) => mlb === 'MLB-PREVIOUS'), false);
+    assert.equal(
+      result.mlbs.find(({ mlb }) => mlb === 'MLB-CURRENT')?.movement,
+      'NEW',
+    );
+    assert.notEqual(
+      result.mlbs.find(({ mlb }) => mlb === 'MLB-SHARED')?.previousClass,
+      null,
+    );
   });
 
   it('scopes C1, C2 and consolidated reads without filtering order status', async () => {
@@ -271,6 +303,64 @@ describe('calculateMlbSalesAbc', () => {
   });
 });
 
+describe('compareMlbSalesAbc', () => {
+  it('classifies A→B, A→C and B→C as declined', () => {
+    assertMovement('A', 'B', 'DECLINED', 'A_TO_B');
+    assertMovement('A', 'C', 'DECLINED', 'A_TO_C');
+    assertMovement('B', 'C', 'DECLINED', 'B_TO_C');
+  });
+
+  it('classifies B→A, C→B and C→A as improved', () => {
+    assertMovement('B', 'A', 'IMPROVED', 'B_TO_A');
+    assertMovement('C', 'B', 'IMPROVED', 'C_TO_B');
+    assertMovement('C', 'A', 'IMPROVED', 'C_TO_A');
+  });
+
+  it('classifies same-class MLBs as stable and missing previous MLBs as new', () => {
+    assertMovement('A', 'A', 'STABLE', 'A_TO_A');
+    const comparison = compareMlbSalesAbc(calculate([item('MLB-NEW', 'v', 'o', 1, '1')]), calculate([]));
+    const added = comparison.mlbs[0]!;
+
+    assert.equal(added.movement, 'NEW');
+    assert.equal(added.previousClass, null);
+    assert.equal(added.classTransition, null);
+    assert.equal(added.previousRank, null);
+    assert.equal(added.rankDelta, null);
+    assert.equal(added.unitsDeltaPercent, null);
+    assert.equal(added.grossRevenueDeltaPercent, null);
+  });
+
+  it('returns rank and metric deltas with null percentage for zero denominators', () => {
+    const previous = calculate([item('MLB1', 'v1', 'o1', 0, '0')]);
+    const current = calculate([item('MLB1', 'v1', 'o1', 2, '12.50')]);
+    const compared = compareMlbSalesAbc(current, previous).mlbs[0]!;
+
+    assert.equal(compared.currentRank, 1);
+    assert.equal(compared.previousRank, 1);
+    assert.equal(compared.rankDelta, 0);
+    assert.equal(compared.currentUnits, 2);
+    assert.equal(compared.previousUnits, 0);
+    assert.equal(compared.unitsDeltaPercent, null);
+    assert.equal(compared.currentGrossRevenue, '25.00');
+    assert.equal(compared.previousGrossRevenue, '0.00');
+    assert.equal(compared.grossRevenueDeltaPercent, null);
+  });
+
+  it('uses the selected Units or Gross Revenue ABC classification in comparisons', () => {
+    const source = [
+      item('MLB-HIGH-UNITS', 'v1', 'o1', 10, '1'),
+      item('MLB-HIGH-REVENUE', 'v2', 'o2', 1, '100'),
+    ];
+    const units = calculate(source, { metric: MlbSalesAbcMetric.Units });
+    const revenue = calculate(source, { metric: MlbSalesAbcMetric.GrossRevenue });
+
+    assert.equal(units.mlbs[0]?.mlb, 'MLB-HIGH-UNITS');
+    assert.equal(revenue.mlbs[0]?.mlb, 'MLB-HIGH-REVENUE');
+    assert.equal(compareMlbSalesAbc(units, units).mlbs[0]?.movement, 'STABLE');
+    assert.equal(compareMlbSalesAbc(revenue, revenue).mlbs[0]?.movement, 'STABLE');
+  });
+});
+
 function request(
   overrides: Partial<Parameters<MlbSalesAbcService['find']>[0]> = {},
 ): Parameters<MlbSalesAbcService['find']>[0] {
@@ -298,6 +388,52 @@ function calculate(
   });
 }
 
+function assertMovement(
+  previousClass: MlbAbcClass,
+  currentClass: MlbAbcClass,
+  expectedMovement: MlbAbcMovement,
+  expectedTransition: MlbAbcClassTransition,
+): void {
+  const previous = calculate(classifiedItems('MLB-TARGET', previousClass));
+  const current = calculate(classifiedItems('MLB-TARGET', currentClass));
+  const target = compareMlbSalesAbc(current, previous).mlbs.find(
+    ({ mlb }) => mlb === 'MLB-TARGET',
+  );
+
+  assert.equal(target?.previousClass, previousClass);
+  assert.equal(target?.currentClass, currentClass);
+  assert.equal(target?.movement, expectedMovement);
+  assert.equal(target?.classTransition, expectedTransition);
+}
+
+function classifiedItems(
+  targetMlb: string,
+  abcClass: MlbAbcClass,
+): MlbSalesAbcSourceItem[] {
+  if (abcClass === 'A') {
+    return [
+      item(targetMlb, 'target', 'target-order', 79, '1'),
+      item('MLB-FILL-2', 'v2', 'o2', 14, '1'),
+      item('MLB-FILL-3', 'v3', 'o3', 5, '1'),
+      item('MLB-FILL-4', 'v4', 'o4', 2, '1'),
+    ];
+  }
+  if (abcClass === 'B') {
+    return [
+      item('MLB-FILL-1', 'v1', 'o1', 79, '1'),
+      item('MLB-FILL-2', 'v2', 'o2', 14, '1'),
+      item(targetMlb, 'target', 'target-order', 5, '1'),
+      item('MLB-FILL-4', 'v4', 'o4', 2, '1'),
+    ];
+  }
+  return [
+    item('MLB-FILL-1', 'v1', 'o1', 79, '1'),
+    item('MLB-FILL-2', 'v2', 'o2', 14, '1'),
+    item('MLB-FILL-3', 'v3', 'o3', 5, '1'),
+    item(targetMlb, 'target', 'target-order', 2, '1'),
+  ];
+}
+
 function item(
   externalListingId: string,
   externalSellableId: string,
@@ -305,7 +441,11 @@ function item(
   quantity: number,
   unitPrice: string,
   grossAmount = new Prisma.Decimal(unitPrice).mul(quantity).toString(),
-  options: { account?: string; status?: MarketplaceOrderStatus } = {},
+  options: {
+    account?: string;
+    status?: MarketplaceOrderStatus;
+    soldAt?: Date;
+  } = {},
 ): MlbSalesAbcSourceItem & { externalSellableId: string } {
   return {
     externalListingId,
@@ -315,6 +455,7 @@ function item(
     grossAmount: new Prisma.Decimal(grossAmount),
     marketplaceOrder: {
       id: orderId,
+      soldAt: options.soldAt ?? new Date('2026-09-15T12:00:00.000Z'),
       normalizedStatus: options.status ?? MarketplaceOrderStatus.PAID,
       marketplaceAccount: {
         businessAccount: { code: options.account ?? 'C1' },

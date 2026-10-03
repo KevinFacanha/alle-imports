@@ -1,14 +1,19 @@
-import type { MlbSalesAbcItem } from "../types/mlb-sales-abc.js"
+import type {
+  MlbAbcMovementFilter,
+  MlbSalesAbcItem,
+} from "../types/mlb-sales-abc.js"
 
 export function filterMlbSalesAbcItems(
   items: MlbSalesAbcItem[],
   search: string,
+  movement: MlbAbcMovementFilter = "ALL",
 ): MlbSalesAbcItem[] {
   const normalized = search.trim().toLocaleLowerCase("pt-BR")
-  if (!normalized) return items
   return items.filter(
     (item) =>
-      item.mlb.toLocaleLowerCase("pt-BR").includes(normalized) ||
-      item.title?.toLocaleLowerCase("pt-BR").includes(normalized),
+      (movement === "ALL" || item.movement === movement) &&
+      (!normalized ||
+        item.mlb.toLocaleLowerCase("pt-BR").includes(normalized) ||
+        item.title?.toLocaleLowerCase("pt-BR").includes(normalized)),
   )
 }
