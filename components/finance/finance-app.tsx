@@ -11,6 +11,7 @@ import { History } from "@/features/history/components/history"
 import { Integrations } from "@/features/integrations/components/integrations"
 import { MarketIntelligence } from "@/features/market-intelligence/components/market-intelligence"
 import { Operation } from "@/features/operation/components/operation"
+import { MlbAbcPage } from "@/features/product-intelligence/components/mlb-abc-page"
 import { initialChatMessages, mockAssistantResponse } from "@/mocks/chat-messages"
 import type { ChatMessage } from "@/types/chat-messages"
 import type { View } from "@/types/navigation"
@@ -42,6 +43,7 @@ export function FinanceApp({ initialView = "assistente" }: { initialView?: View 
   const activeFeature = {
     assistente: <Assistant input={input} setInput={setInput} messages={messages} ask={ask} />,
     dashboard: <Dashboard />,
+    "product-intelligence": <MlbAbcPage />,
     operacao: <Operation />,
     alertas: <Alerts />,
     aprovacoes: <Approvals approved={approved} setApproved={setApproved} />,

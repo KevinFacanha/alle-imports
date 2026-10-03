@@ -9,6 +9,7 @@ export type View =
   | "historico"
   | "integracoes"
   | "inteligencia"
+  | "product-intelligence"
 
 export interface NavigationItem {
   id: View

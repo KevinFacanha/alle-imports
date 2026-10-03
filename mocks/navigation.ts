@@ -6,6 +6,7 @@ import {
   History,
   LayoutDashboard,
   MessageSquare,
+  PackageSearch,
   PlugZap,
 } from "lucide-react"
 
@@ -14,6 +15,7 @@ import type { NavigationItem } from "@/types/navigation"
 export const navigationItems: NavigationItem[] = [
   { id: "assistente", label: "Assistente", icon: MessageSquare },
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "product-intelligence", label: "Product Intelligence", icon: PackageSearch },
   { id: "operacao", label: "Operação", icon: Activity },
   {
     id: "alertas",
