@@ -12,13 +12,13 @@ import type {
   NoSaleThreshold,
 } from "@/types/no-sale-listings"
 
-const initialFilters: NoSaleListingsFilters = {
+const defaultFilters: NoSaleListingsFilters = {
   account: "ALL",
   days: 30,
   listingStatus: "ACTIVE",
 }
 
-export function useNoSaleListings() {
+export function useNoSaleListings(initialFilters: NoSaleListingsFilters = defaultFilters) {
   const [filters, setFilters] = useState(initialFilters)
   const [report, setReport] = useState<NoSaleListingsResponse | null>(null)
   const [state, setState] = useState<"loading" | "success" | "error">("loading")

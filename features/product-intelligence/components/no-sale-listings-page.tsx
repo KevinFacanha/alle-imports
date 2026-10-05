@@ -28,6 +28,7 @@ import { noSaleStaleBanner } from "@/features/product-intelligence/lib/no-sale-d
 import type {
   NoSaleAccount,
   NoSaleListingItem,
+  NoSaleListingsFilters,
   NoSaleListingStatusFilter,
   NoSaleThreshold,
 } from "@/types/no-sale-listings"
@@ -35,9 +36,12 @@ import type {
 const integer = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 })
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" })
 
-export function NoSaleListingsPage() {
-  const intelligence = useNoSaleListings()
-  const [search, setSearch] = useState("")
+export function NoSaleListingsPage({ initialFilters, initialSearch = "" }: {
+  initialFilters?: NoSaleListingsFilters
+  initialSearch?: string
+} = {}) {
+  const intelligence = useNoSaleListings(initialFilters)
+  const [search, setSearch] = useState(initialSearch)
   const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR")
   const listings = useMemo(
     () => (intelligence.report?.listings ?? []).filter((listing) =>

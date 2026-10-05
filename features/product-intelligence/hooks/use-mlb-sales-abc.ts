@@ -24,13 +24,13 @@ export interface MlbSalesAbcViewModel {
   retry: () => void
 }
 
-const initialFilters: MlbSalesAbcFilters = {
+const defaultFilters: MlbSalesAbcFilters = {
   period: 30,
   scope: "CONSOLIDATED",
   metric: "UNITS",
 }
 
-export function useMlbSalesAbc(): MlbSalesAbcViewModel {
+export function useMlbSalesAbc(initialFilters: MlbSalesAbcFilters = defaultFilters): MlbSalesAbcViewModel {
   const [filters, setFilters] = useState<MlbSalesAbcFilters>(initialFilters)
   const [report, setReport] = useState<MlbSalesAbcReport | null>(null)
   const [requestState, setRequestState] = useState<"loading" | "success" | "error">("loading")

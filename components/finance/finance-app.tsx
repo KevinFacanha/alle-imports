@@ -13,6 +13,7 @@ import { MarketIntelligence } from "@/features/market-intelligence/components/ma
 import { Operation } from "@/features/operation/components/operation"
 import {
   ProductIntelligencePage,
+  type ProductIntelligenceInitialState,
   type ProductIntelligenceSection,
 } from "@/features/product-intelligence/components/product-intelligence-page"
 import { initialChatMessages, mockAssistantResponse } from "@/mocks/chat-messages"
@@ -21,10 +22,12 @@ import type { View } from "@/types/navigation"
 
 export function FinanceApp({
   initialView = "assistente",
-  initialProductIntelligenceSection = "no-sale",
+  initialProductIntelligenceSection = "attention",
+  initialProductIntelligenceState,
 }: {
   initialView?: View
   initialProductIntelligenceSection?: ProductIntelligenceSection
+  initialProductIntelligenceState?: ProductIntelligenceInitialState
 }) {
   const [view, setView] = useState<View>(initialView)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -52,7 +55,7 @@ export function FinanceApp({
   const activeFeature = {
     assistente: <Assistant input={input} setInput={setInput} messages={messages} ask={ask} />,
     dashboard: <Dashboard />,
-    "product-intelligence": <ProductIntelligencePage initialSection={initialProductIntelligenceSection} />,
+    "product-intelligence": <ProductIntelligencePage initialSection={initialProductIntelligenceSection} initialState={initialProductIntelligenceState} />,
     operacao: <Operation />,
     alertas: <Alerts />,
     aprovacoes: <Approvals approved={approved} setApproved={setApproved} />,

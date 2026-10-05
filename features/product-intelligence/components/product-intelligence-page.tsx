@@ -1,22 +1,53 @@
 "use client"
 
 import { useState } from "react"
-import { BarChart3, PackageSearch } from "lucide-react"
+import { BarChart3, PackageSearch, ShieldAlert } from "lucide-react"
 
+import type { MlbAbcMovementFilter, MlbAbcScope, MlbRevenueMovementFilter, MlbSalesAbcFilters } from "@/types/mlb-sales-abc"
+import type { NoSaleListingsFilters } from "@/types/no-sale-listings"
+
+import { AttentionCenterPage } from "./attention-center-page"
 import { MlbAbcPage } from "./mlb-abc-page"
 import { NoSaleListingsPage } from "./no-sale-listings-page"
 
-export type ProductIntelligenceSection = "no-sale" | "abc"
+export type ProductIntelligenceSection = "attention" | "no-sale" | "abc"
 
-export function ProductIntelligencePage({ initialSection = "no-sale" }: { initialSection?: ProductIntelligenceSection }) {
+export interface ProductIntelligenceInitialState {
+  attentionScope?: MlbAbcScope
+  abc?: {
+    filters: MlbSalesAbcFilters
+    search?: string
+    revenueMovement?: MlbRevenueMovementFilter
+    curveMovement?: MlbAbcMovementFilter
+  }
+  noSale?: {
+    filters: NoSaleListingsFilters
+    search?: string
+  }
+}
+
+export function ProductIntelligencePage({ initialSection = "attention", initialState = {} }: {
+  initialSection?: ProductIntelligenceSection
+  initialState?: ProductIntelligenceInitialState
+}) {
   const [section, setSection] = useState(initialSection)
   return (
     <div className="space-y-6">
       <nav className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm" aria-label="Seções de Product Intelligence">
+        <Tab active={section === "attention"} onClick={() => setSection("attention")}><ShieldAlert size={15} /> Central de Atenção</Tab>
         <Tab active={section === "no-sale"} onClick={() => setSection("no-sale")}><PackageSearch size={15} /> Anúncios sem venda</Tab>
         <Tab active={section === "abc"} onClick={() => setSection("abc")}><BarChart3 size={15} /> Curva ABC</Tab>
       </nav>
-      {section === "no-sale" ? <NoSaleListingsPage /> : <MlbAbcPage />}
+      {section === "attention" && <AttentionCenterPage initialScope={initialState.attentionScope} />}
+      {section === "no-sale" && <NoSaleListingsPage initialFilters={initialState.noSale?.filters} initialSearch={initialState.noSale?.search} />}
+      {section === "abc" && (
+        <MlbAbcPage
+          initialFilters={initialState.abc?.filters}
+          initialSearch={initialState.abc?.search}
+          initialRevenueMovement={initialState.abc?.revenueMovement}
+          initialCurveMovement={initialState.abc?.curveMovement}
+        />
+      )}
     </div>
   )
 }

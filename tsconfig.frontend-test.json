@@ -18,6 +18,9 @@
     "services/mlb-sales-abc-search.spec.ts",
     "features/product-intelligence/lib/no-sale-data-coverage.ts",
     "features/product-intelligence/lib/no-sale-data-coverage.spec.ts",
-    "types/mlb-sales-abc.ts"
+    "features/product-intelligence/lib/attention-center.ts",
+    "features/product-intelligence/lib/attention-center.spec.ts",
+    "types/mlb-sales-abc.ts",
+    "types/no-sale-listings.ts"
   ]
 }

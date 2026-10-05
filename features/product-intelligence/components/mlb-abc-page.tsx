@@ -42,6 +42,7 @@ import type {
   MlbAbcMovementFilter,
   MlbRevenueMovement,
   MlbRevenueMovementFilter,
+  MlbSalesAbcFilters,
   MlbSalesAbcItem,
   MlbSalesAbcReport,
 } from "@/types/mlb-sales-abc"
@@ -55,11 +56,21 @@ const abcDefinitions = [
   { abcClass: "C", target: "5%", color: "slate" },
 ] as const
 
-export function MlbAbcPage() {
-  const abc = useMlbSalesAbc()
-  const [search, setSearch] = useState("")
-  const [revenueMovementFilter, setRevenueMovementFilter] = useState<MlbRevenueMovementFilter>("ALL")
-  const [curveMovementFilter, setCurveMovementFilter] = useState<MlbAbcMovementFilter>("ALL")
+export function MlbAbcPage({
+  initialFilters,
+  initialSearch = "",
+  initialRevenueMovement = "ALL",
+  initialCurveMovement = "ALL",
+}: {
+  initialFilters?: MlbSalesAbcFilters
+  initialSearch?: string
+  initialRevenueMovement?: MlbRevenueMovementFilter
+  initialCurveMovement?: MlbAbcMovementFilter
+} = {}) {
+  const abc = useMlbSalesAbc(initialFilters)
+  const [search, setSearch] = useState(initialSearch)
+  const [revenueMovementFilter, setRevenueMovementFilter] = useState<MlbRevenueMovementFilter>(initialRevenueMovement)
+  const [curveMovementFilter, setCurveMovementFilter] = useState<MlbAbcMovementFilter>(initialCurveMovement)
   const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR")
   const visibleMlbs = useMemo(
     () => filterMlbSalesAbcItems(
