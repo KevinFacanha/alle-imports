@@ -14,6 +14,8 @@
     "services/mlb-sales-abc-refresh.spec.ts",
     "services/mlb-sales-abc-search.ts",
     "services/mlb-sales-abc-search.spec.ts",
+    "features/product-intelligence/lib/no-sale-data-coverage.ts",
+    "features/product-intelligence/lib/no-sale-data-coverage.spec.ts",
     "types/mlb-sales-abc.ts"
   ]
 }

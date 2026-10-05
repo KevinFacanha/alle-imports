@@ -38,6 +38,10 @@ export interface NoSaleListingsResponse {
   metadata: {
     generatedAt: string
     timezone: string
+    dataThrough: string | null
+    historyThrough: string | null
+    isDataCurrent: boolean
+    staleDays: number | null
     thresholdDays: NoSaleThreshold
     account: NoSaleAccount
     listingStatus: NoSaleListingStatusFilter

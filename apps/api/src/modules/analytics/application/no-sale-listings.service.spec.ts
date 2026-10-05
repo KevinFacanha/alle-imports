@@ -53,6 +53,40 @@ describe('NoSaleListingsService read model', () => {
       potentialRevenueAtRiskReason:
         'Sem base confiável aprovada para estimar faturamento potencial.',
     });
+    assert.equal(report.metadata.dataThrough, NOW.toISOString());
+    assert.equal(report.metadata.historyThrough, NOW.toISOString());
+    assert.equal(report.metadata.isDataCurrent, true);
+    assert.equal(report.metadata.staleDays, 0);
+  });
+
+  it('keeps stale reports stable and evaluates age and sales as of historyThrough', () => {
+    const listings = [
+      listing('MLB-EXACT-30', 'C1', 30, 'Alerta válido no corte'),
+      listing('MLB-YOUNG-AT-CUT', 'C1', 29, 'Não envelhece sem dados'),
+      listing('MLB-RECENT-AT-CUT', 'C1', 100, 'Venda recente no corte'),
+    ];
+    const orderItems = [
+      sale('MLB-EXACT-30', 'C1', 30, MarketplaceOrderStatus.PAID),
+      sale('MLB-RECENT-AT-CUT', 'C1', 29, MarketplaceOrderStatus.PAID),
+    ];
+
+    for (const staleDays of [1, 2]) {
+      const report = build({
+        now: daysAfter(NOW, staleDays),
+        coverageThrough: NOW,
+        listings,
+        orderItems,
+      });
+
+      assert.deepEqual(report.listings.map(({ mlb }) => mlb), ['MLB-EXACT-30']);
+      assert.equal(report.listings[0]?.listingAgeDays, 30);
+      assert.equal(report.listings[0]?.daysSinceLastSale, 30);
+      assert.equal(report.summary.noSale30d, 1);
+      assert.equal(report.metadata.dataThrough, NOW.toISOString());
+      assert.equal(report.metadata.historyThrough, NOW.toISOString());
+      assert.equal(report.metadata.isDataCurrent, false);
+      assert.equal(report.metadata.staleDays, staleDays);
+    }
   });
 
   it('does not let an isolated cancellation mask the lack of an effective sale', () => {
@@ -103,6 +137,29 @@ describe('NoSaleListingsService read model', () => {
     assert.deepEqual(
       report.listings.map(({ account, mlb }) => [account, mlb]),
       [['C2', 'MLB-SHARED']],
+    );
+  });
+
+  it('applies C1, C2 and ALL account scopes', () => {
+    const listings = [
+      listing('MLB-C1', 'C1', 70, 'Conta 1'),
+      listing('MLB-C2', 'C2', 70, 'Conta 2'),
+    ];
+
+    assert.deepEqual(
+      build({ account: NoSaleListingsAccount.C1, listings, orderItems: [] })
+        .listings.map(({ account }) => account),
+      ['C1'],
+    );
+    assert.deepEqual(
+      build({ account: NoSaleListingsAccount.C2, listings, orderItems: [] })
+        .listings.map(({ account }) => account),
+      ['C2'],
+    );
+    assert.deepEqual(
+      build({ account: NoSaleListingsAccount.All, listings, orderItems: [] })
+        .listings.map(({ account }) => account),
+      ['C1', 'C2'],
     );
   });
 
@@ -166,8 +223,10 @@ function build(options: {
   listings: NoSaleListingSource[];
   orderItems: NoSaleOrderItemSource[];
   coverageDays?: number;
+  coverageThrough?: Date;
 }) {
   const now = options.now ?? NOW;
+  const coverageThrough = options.coverageThrough ?? now;
   const coverageDays = options.coverageDays ?? 94;
   return buildNoSaleListings({
     now,
@@ -179,8 +238,8 @@ function build(options: {
     orderItems: options.orderItems,
     coverage: ['C1', 'C2'].map((account) => ({
       account,
-      from: daysBefore(now, coverageDays),
-      through: now,
+      from: daysBefore(coverageThrough, coverageDays),
+      through: coverageThrough,
     })),
   });
 }
@@ -230,4 +289,8 @@ function saleAt(
 
 function daysBefore(date: Date, days: number): Date {
   return new Date(date.getTime() - days * 86_400_000);
+}
+
+function daysAfter(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 86_400_000);
 }

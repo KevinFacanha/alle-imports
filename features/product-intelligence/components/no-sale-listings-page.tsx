@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useNoSaleListings } from "@/features/product-intelligence/hooks/use-no-sale-listings"
+import { noSaleStaleBanner } from "@/features/product-intelligence/lib/no-sale-data-coverage"
 import type {
   NoSaleAccount,
   NoSaleListingItem,
@@ -47,8 +48,11 @@ export function NoSaleListingsPage() {
     [intelligence.report, normalizedSearch],
   )
   const historyIncomplete = intelligence.report?.metadata.history.some(
-    (history) => history.availableDays < intelligence.filters.days || !history.currentThroughBusinessDay,
+    (history) => history.availableDays < intelligence.filters.days,
   )
+  const staleBanner = intelligence.report
+    ? noSaleStaleBanner(intelligence.report.metadata, formatDate)
+    : null
 
   return (
     <section className="space-y-6" aria-labelledby="no-sale-title">
@@ -102,6 +106,17 @@ export function NoSaleListingsPage() {
       {intelligence.state === "success" && intelligence.report && (
         <div className="space-y-6">
           <SummaryCards summary={intelligence.report.summary} />
+          {staleBanner && (
+            <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900" role="status">
+              <History className="mt-0.5 shrink-0" size={18} />
+              <div>
+                <p className="text-sm font-bold">{staleBanner.title}</p>
+                {staleBanner.detail && (
+                  <p className="mt-1 text-xs leading-5 text-amber-800">{staleBanner.detail}</p>
+                )}
+              </div>
+            </div>
+          )}
           {historyIncomplete && (
             <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
               <History className="mt-0.5 shrink-0" size={18} />

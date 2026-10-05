@@ -87,6 +87,10 @@ export interface NoSaleListingsResponse {
   metadata: {
     generatedAt: string;
     timezone: string;
+    dataThrough: string | null;
+    historyThrough: string | null;
+    isDataCurrent: boolean;
+    staleDays: number | null;
     thresholdDays: 30 | 60 | 90;
     account: NoSaleListingsAccount;
     listingStatus: NoSaleListingStatusFilter;
@@ -209,7 +213,7 @@ export class NoSaleListingsService {
             ON marketplace_order.id = order_item.marketplace_order_id
             AND marketplace_order.marketplace_account_id = listing_account.id
             AND marketplace_order.sold_at >= coverage.history_from
-            AND marketplace_order.sold_at <= ${now}
+            AND marketplace_order.sold_at <= coverage.history_through
           WHERE listing_account.marketplace = 'MERCADO_LIVRE'
             AND listing_business.code = coverage.account
             AND ${listingStatusSql(query.listingStatus)}
@@ -314,7 +318,11 @@ export function buildNoSaleListings(
   );
   const evaluated = input.listings.flatMap((listing) => {
     const account = listing.marketplaceAccount.businessAccount?.code;
-    if (!account || !matchesListingStatus(listing.status, input.listingStatus)) {
+    if (
+      !account ||
+      (input.account !== NoSaleListingsAccount.All && account !== input.account) ||
+      !matchesListingStatus(listing.status, input.listingStatus)
+    ) {
       return [];
     }
     const key = listingKey(account, listing.externalListingId);
@@ -324,21 +332,24 @@ export function buildNoSaleListings(
       earliestOrderEvidence && earliestOrderEvidence < listing.createdAt
         ? earliestOrderEvidence
         : listing.createdAt;
+    if (!coverage) return [];
+    const referenceDate = coverage.through;
     const listingAgeDays = businessDateDifference(
       listingFirstSeenAt,
-      input.now,
+      referenceDate,
       input.timezone,
     );
-    const coverageIsCurrent = coverage
-      ? businessDateDifference(coverage.through, input.now, input.timezone) === 0
-      : false;
-    const availableHistoryDays = coverage
-      ? businessDateDifference(coverage.from, coverage.through, input.timezone)
-      : 0;
+    const availableHistoryDays = businessDateDifference(
+      coverage.from,
+      coverage.through,
+      input.timezone,
+    );
     const observedNoSaleDays = Math.min(listingAgeDays, availableHistoryDays);
     const sales = (salesByListing.get(
       key,
-    ) ?? []).filter(({ marketplaceOrder }) => marketplaceOrder.soldAt <= input.now);
+    ) ?? []).filter(
+      ({ marketplaceOrder }) => marketplaceOrder.soldAt <= referenceDate,
+    );
     const lastSaleAt = sales.reduce<Date | null>(
       (latest, sale) =>
         latest === null || sale.marketplaceOrder.soldAt > latest
@@ -347,13 +358,13 @@ export function buildNoSaleListings(
       null,
     );
     const daysSinceLastSale = lastSaleAt
-      ? businessDateDifference(lastSaleAt, input.now, input.timezone)
+      ? businessDateDifference(lastSaleAt, referenceDate, input.timezone)
       : null;
     const sales30d = sales.filter(
       ({ marketplaceOrder }) =>
         businessDateDifference(
           marketplaceOrder.soldAt,
-          input.now,
+          referenceDate,
           input.timezone,
         ) < 30,
     );
@@ -368,7 +379,6 @@ export function buildNoSaleListings(
       {
         source: listing,
         availableHistoryDays,
-        coverageIsCurrent,
         listingFirstSeenAt,
         listingAgeDays,
         lastSaleAt,
@@ -385,7 +395,6 @@ export function buildNoSaleListings(
   });
 
   const qualifies = (item: (typeof evaluated)[number], days: number) =>
-    item.coverageIsCurrent &&
     item.listingAgeDays >= days &&
     item.availableHistoryDays >= days &&
     (item.daysSinceLastSale === null || item.daysSinceLastSale >= days);
@@ -422,10 +431,25 @@ export function buildNoSaleListings(
     input.account === NoSaleListingsAccount.All
       ? [...ACCOUNTS]
       : [input.account];
+  const selectedCoverage = coveredAccounts
+    .map((account) => coverageByAccount.get(account))
+    .filter((item): item is AccountHistoryCoverage => item !== undefined);
+  const dataThrough = selectedCoverage.length === coveredAccounts.length
+    ? selectedCoverage.reduce((earliest, item) =>
+        item.through < earliest.through ? item : earliest,
+      ).through
+    : null;
+  const staleDays = dataThrough
+    ? businessDateDifference(dataThrough, input.now, input.timezone)
+    : null;
   return {
     metadata: {
       generatedAt: input.now.toISOString(),
       timezone: input.timezone,
+      dataThrough: dataThrough?.toISOString() ?? null,
+      historyThrough: dataThrough?.toISOString() ?? null,
+      isDataCurrent: staleDays === 0,
+      staleDays,
       thresholdDays: input.thresholdDays,
       account: input.account,
       listingStatus: input.listingStatus,

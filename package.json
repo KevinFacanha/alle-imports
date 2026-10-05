@@ -13,7 +13,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:api": "npm run test --workspace=@ale-intelligence/api",
-    "test:frontend": "tsc --project tsconfig.frontend-test.json && node --test .frontend-test-dist/services/mlb-sales-abc-refresh.spec.js .frontend-test-dist/services/mlb-sales-abc-search.spec.js",
+    "test:frontend": "tsc --project tsconfig.frontend-test.json && node --test .frontend-test-dist/services/mlb-sales-abc-refresh.spec.js .frontend-test-dist/services/mlb-sales-abc-search.spec.js .frontend-test-dist/features/product-intelligence/lib/no-sale-data-coverage.spec.js",
     "analytics:daily-sales": "npm run analytics:daily-sales --workspace=@ale-intelligence/api --",
     "ingest:ml:orders": "npm run ingest:ml:orders --workspace=@ale-intelligence/api --",
     "backfill:ml:orders": "npm run backfill:ml:orders --workspace=@ale-intelligence/api --",
