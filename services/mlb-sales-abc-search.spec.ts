@@ -16,15 +16,16 @@ describe("filterMlbSalesAbcItems", () => {
     assert.deepEqual(filterMlbSalesAbcItems(items, "inexistente"), [])
   })
 
-  it("filters movement together with the text search", () => {
+  it("filters revenue and curve movements independently with text search", () => {
     const movingItems = [
-      { ...items[0]!, movement: "DECLINED" as const },
-      { ...items[1]!, movement: "IMPROVED" as const },
+      { ...items[0]!, movement: "DECLINED" as const, revenueMovement: "INCREASED" as const },
+      { ...items[1]!, movement: "IMPROVED" as const, revenueMovement: "DECREASED" as const },
     ]
 
-    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "", "DECLINED"), [movingItems[0]])
-    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "mlb456", "IMPROVED"), [movingItems[1]])
-    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "mlb123", "IMPROVED"), [])
+    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "", "DECREASED"), [movingItems[1]])
+    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "", "ALL", "DECLINED"), [movingItems[0]])
+    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "mlb123", "INCREASED", "DECLINED"), [movingItems[0]])
+    assert.deepEqual(filterMlbSalesAbcItems(movingItems, "", "DECREASED", "DECLINED"), [])
   })
 })
 
@@ -49,9 +50,16 @@ function item(mlb: string, title: string | null): MlbSalesAbcItem {
     rankDelta: 0,
     currentUnits: 1,
     previousUnits: 1,
+    unitsDelta: 0,
     unitsDeltaPercent: 0,
     currentGrossRevenue: "10.00",
     previousGrossRevenue: "10.00",
+    grossRevenueDelta: "0.00",
     grossRevenueDeltaPercent: 0,
+    revenueMovement: "STABLE",
+    revenueEnteringWindow: "0.00",
+    revenueLeavingWindow: "0.00",
+    unitsEnteringWindow: 0,
+    unitsLeavingWindow: 0,
   }
 }

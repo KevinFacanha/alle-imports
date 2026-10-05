@@ -101,6 +101,34 @@ describe('MlbSalesAbcService', () => {
     );
   });
 
+  it('explains the delta with the revenue and units entering and leaving the window', async () => {
+    const database = new MlbAbcDatabase([
+      item('MLB-SHARED', 'leaving', 'o1', 2, '10', undefined, {
+        soldAt: new Date('2026-08-31T12:00:00.000Z'),
+      }),
+      item('MLB-SHARED', 'overlap', 'o2', 10, '10', undefined, {
+        soldAt: new Date('2026-09-15T12:00:00.000Z'),
+      }),
+      item('MLB-SHARED', 'entering', 'o3', 3, '10', undefined, {
+        soldAt: new Date('2026-09-30T12:00:00.000Z'),
+      }),
+    ]);
+
+    const compared = (await service(database).find(request())).mlbs[0]!;
+
+    assert.equal(compared.previousGrossRevenue, '120.00');
+    assert.equal(compared.currentGrossRevenue, '130.00');
+    assert.equal(compared.grossRevenueDelta, '10.00');
+    assert.equal(compared.revenueLeavingWindow, '20.00');
+    assert.equal(compared.revenueEnteringWindow, '30.00');
+    assert.equal(compared.previousUnits, 12);
+    assert.equal(compared.currentUnits, 13);
+    assert.equal(compared.unitsDelta, 1);
+    assert.equal(compared.unitsLeavingWindow, 2);
+    assert.equal(compared.unitsEnteringWindow, 3);
+    assert.equal(database.calls.length, 1);
+  });
+
   it('scopes C1, C2 and consolidated reads without filtering order status', async () => {
     const database = new MlbAbcDatabase([]);
     const queryService = service(database);
@@ -326,8 +354,11 @@ describe('compareMlbSalesAbc', () => {
     assert.equal(added.classTransition, null);
     assert.equal(added.previousRank, null);
     assert.equal(added.rankDelta, null);
+    assert.equal(added.unitsDelta, 1);
     assert.equal(added.unitsDeltaPercent, null);
+    assert.equal(added.grossRevenueDelta, '1.00');
     assert.equal(added.grossRevenueDeltaPercent, null);
+    assert.equal(added.revenueMovement, 'NEW');
   });
 
   it('returns rank and metric deltas with null percentage for zero denominators', () => {
@@ -340,10 +371,69 @@ describe('compareMlbSalesAbc', () => {
     assert.equal(compared.rankDelta, 0);
     assert.equal(compared.currentUnits, 2);
     assert.equal(compared.previousUnits, 0);
+    assert.equal(compared.unitsDelta, 2);
     assert.equal(compared.unitsDeltaPercent, null);
     assert.equal(compared.currentGrossRevenue, '25.00');
     assert.equal(compared.previousGrossRevenue, '0.00');
+    assert.equal(compared.grossRevenueDelta, '25.00');
     assert.equal(compared.grossRevenueDeltaPercent, null);
+    assert.equal(compared.revenueMovement, 'INCREASED');
+  });
+
+  it('classifies positive, negative and zero revenue deltas independently', () => {
+    const previous = calculate([
+      item('MLB-GAIN', 'v1', 'o1', 1, '10'),
+      item('MLB-LOSS', 'v2', 'o2', 1, '100'),
+      item('MLB-STABLE', 'v3', 'o3', 1, '25'),
+    ]);
+    const current = calculate([
+      item('MLB-GAIN', 'v1', 'o1', 1, '50'),
+      item('MLB-LOSS', 'v2', 'o2', 1, '40'),
+      item('MLB-STABLE', 'v3', 'o3', 1, '25'),
+    ]);
+    const result = compareMlbSalesAbc(current, previous);
+    const byMlb = new Map(result.mlbs.map((entry) => [entry.mlb, entry]));
+
+    assert.deepEqual(
+      ['MLB-GAIN', 'MLB-LOSS', 'MLB-STABLE'].map((mlb) => ({
+        mlb,
+        movement: byMlb.get(mlb)?.revenueMovement,
+        delta: byMlb.get(mlb)?.grossRevenueDelta,
+      })),
+      [
+        { mlb: 'MLB-GAIN', movement: 'INCREASED', delta: '40.00' },
+        { mlb: 'MLB-LOSS', movement: 'DECREASED', delta: '-60.00' },
+        { mlb: 'MLB-STABLE', movement: 'STABLE', delta: '0.00' },
+      ],
+    );
+    assert.equal(result.movementSummary.revenueIncreased, 1);
+    assert.equal(result.movementSummary.revenueDecreased, 1);
+    assert.equal(result.movementSummary.grossRevenueGain, '40.00');
+    assert.equal(result.movementSummary.grossRevenueLoss, '60.00');
+  });
+
+  it('keeps ABC and revenue movements independent', () => {
+    const scenarios = [
+      { previousClass: 'A', currentClass: 'A', previousPrice: '10', currentPrice: '5', expected: 'DECREASED' },
+      { previousClass: 'B', currentClass: 'A', previousPrice: '1', currentPrice: '2', expected: 'INCREASED' },
+      { previousClass: 'A', currentClass: 'B', previousPrice: '1', currentPrice: '20', expected: 'INCREASED' },
+      { previousClass: 'B', currentClass: 'C', previousPrice: '10', currentPrice: '25', expected: 'STABLE' },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const previousItems = classifiedItems('MLB-TARGET', scenario.previousClass);
+      const currentItems = classifiedItems('MLB-TARGET', scenario.currentClass);
+      previousItems.find((entry) => entry.externalListingId === 'MLB-TARGET')!.unitPrice = new Prisma.Decimal(scenario.previousPrice);
+      currentItems.find((entry) => entry.externalListingId === 'MLB-TARGET')!.unitPrice = new Prisma.Decimal(scenario.currentPrice);
+      const target = compareMlbSalesAbc(
+        calculate(currentItems),
+        calculate(previousItems),
+      ).mlbs.find((entry) => entry.mlb === 'MLB-TARGET');
+
+      assert.equal(target?.previousClass, scenario.previousClass);
+      assert.equal(target?.currentClass, scenario.currentClass);
+      assert.equal(target?.revenueMovement, scenario.expected);
+    }
   });
 
   it('uses the selected Units or Gross Revenue ABC classification in comparisons', () => {

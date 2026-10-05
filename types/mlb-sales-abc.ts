@@ -8,9 +8,13 @@ export type MlbAbcClass = "A" | "B" | "C"
 
 export type MlbAbcMovement = "IMPROVED" | "DECLINED" | "STABLE" | "NEW"
 
+export type MlbRevenueMovement = "INCREASED" | "DECREASED" | "STABLE" | "NEW"
+
 export type MlbAbcClassTransition = `${MlbAbcClass}_TO_${MlbAbcClass}`
 
-export type MlbAbcMovementFilter = "ALL" | MlbAbcMovement
+export type MlbAbcMovementFilter = "ALL" | "DECLINED" | "IMPROVED"
+
+export type MlbRevenueMovementFilter = "ALL" | "DECREASED" | "INCREASED"
 
 export interface MlbSalesAbcFilters {
   period: MlbAbcPeriod
@@ -38,10 +42,17 @@ export interface MlbSalesAbcItem {
   rankDelta: number | null
   currentUnits: number
   previousUnits: number
+  unitsDelta: number
   unitsDeltaPercent: number | null
   currentGrossRevenue: string
   previousGrossRevenue: string
+  grossRevenueDelta: string
   grossRevenueDeltaPercent: number | null
+  revenueMovement: MlbRevenueMovement
+  revenueEnteringWindow: string
+  revenueLeavingWindow: string
+  unitsEnteringWindow: number
+  unitsLeavingWindow: number
 }
 
 export interface MlbSalesAbcMovementSummary {
@@ -52,6 +63,10 @@ export interface MlbSalesAbcMovementSummary {
   aToB: number
   aToC: number
   bToC: number
+  revenueDecreased: number
+  revenueIncreased: number
+  grossRevenueLoss: string
+  grossRevenueGain: string
 }
 
 export interface MlbSalesAbcReport {

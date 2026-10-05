@@ -14,6 +14,7 @@ const PERCENTAGE_SCALE = 6;
 
 export type MlbAbcClass = 'A' | 'B' | 'C';
 export type MlbAbcMovement = 'IMPROVED' | 'DECLINED' | 'STABLE' | 'NEW';
+export type MlbRevenueMovement = 'INCREASED' | 'DECREASED' | 'STABLE' | 'NEW';
 export type MlbAbcClassTransition = `${MlbAbcClass}_TO_${MlbAbcClass}`;
 
 interface DecimalLike {
@@ -59,10 +60,17 @@ export interface MlbSalesAbcMovementItem extends MlbSalesAbcItem {
   rankDelta: number | null;
   currentUnits: number;
   previousUnits: number;
+  unitsDelta: number;
   unitsDeltaPercent: number | null;
   currentGrossRevenue: string;
   previousGrossRevenue: string;
+  grossRevenueDelta: string;
   grossRevenueDeltaPercent: number | null;
+  revenueMovement: MlbRevenueMovement;
+  revenueEnteringWindow: string;
+  revenueLeavingWindow: string;
+  unitsEnteringWindow: number;
+  unitsLeavingWindow: number;
 }
 
 export interface MlbSalesAbcMovementSummary {
@@ -73,6 +81,17 @@ export interface MlbSalesAbcMovementSummary {
   aToB: number;
   aToC: number;
   bToC: number;
+  revenueDecreased: number;
+  revenueIncreased: number;
+  grossRevenueLoss: string;
+  grossRevenueGain: string;
+}
+
+interface MlbWindowMovement {
+  revenueEnteringWindow: Prisma.Decimal;
+  revenueLeavingWindow: Prisma.Decimal;
+  unitsEnteringWindow: number;
+  unitsLeavingWindow: number;
 }
 
 export interface MlbSalesAbcReport {
@@ -259,6 +278,16 @@ export class MlbSalesAbcService {
         soldAt !== undefined && soldAt >= previousStart && soldAt < previousEnd
       );
     });
+    const windowMovement = calculateWindowMovement(
+      titledItems.filter(({ marketplaceOrder }) => {
+        const soldAt = marketplaceOrder.soldAt;
+        return soldAt !== undefined && soldAt >= previousEnd && soldAt < end;
+      }),
+      titledItems.filter(({ marketplaceOrder }) => {
+        const soldAt = marketplaceOrder.soldAt;
+        return soldAt !== undefined && soldAt >= previousStart && soldAt < start;
+      }),
+    );
     const currentReport = calculateMlbSalesAbc({
       ...resolved,
       timezone: this.businessTimeZone,
@@ -269,7 +298,11 @@ export class MlbSalesAbcService {
       timezone: this.businessTimeZone,
       items: previousItems,
     });
-    const comparison = compareMlbSalesAbc(currentReport, previousReport);
+    const comparison = compareMlbSalesAbc(
+      currentReport,
+      previousReport,
+      windowMovement,
+    );
 
     return {
       ...currentReport,
@@ -375,6 +408,7 @@ export function calculateMlbSalesAbc(input: ResolvedMlbSalesAbcRequest & {
 export function compareMlbSalesAbc(
   current: MlbSalesAbcBaseReport,
   previous: MlbSalesAbcBaseReport,
+  windowMovement: ReadonlyMap<string, MlbWindowMovement> = new Map(),
 ): {
   movementSummary: MlbSalesAbcMovementSummary;
   mlbs: MlbSalesAbcMovementItem[];
@@ -388,10 +422,26 @@ export function compareMlbSalesAbc(
     aToB: 0,
     aToC: 0,
     bToC: 0,
+    revenueDecreased: 0,
+    revenueIncreased: 0,
+    grossRevenueLoss: '0.00',
+    grossRevenueGain: '0.00',
   };
+  let grossRevenueLoss = new Prisma.Decimal(0);
+  let grossRevenueGain = new Prisma.Decimal(0);
   const mlbs = current.mlbs.map((item): MlbSalesAbcMovementItem => {
     const previousItem = previousByMlb.get(item.mlb);
     const movement = movementFromClasses(item.abcClass, previousItem?.abcClass);
+    const currentGrossRevenue = new Prisma.Decimal(item.grossRevenue);
+    const previousGrossRevenue = previousItem
+      ? new Prisma.Decimal(previousItem.grossRevenue)
+      : new Prisma.Decimal(0);
+    const grossRevenueDelta = currentGrossRevenue.minus(previousGrossRevenue);
+    const revenueMovement = revenueMovementFromDelta(
+      grossRevenueDelta,
+      previousItem !== undefined,
+    );
+    const window = windowMovement.get(item.mlb);
     const classTransition = previousItem
       ? (`${previousItem.abcClass}_TO_${item.abcClass}` as MlbAbcClassTransition)
       : null;
@@ -402,6 +452,13 @@ export function compareMlbSalesAbc(
     if (classTransition === 'A_TO_B') movementSummary.aToB += 1;
     if (classTransition === 'A_TO_C') movementSummary.aToC += 1;
     if (classTransition === 'B_TO_C') movementSummary.bToC += 1;
+    if (revenueMovement === 'DECREASED') {
+      movementSummary.revenueDecreased += 1;
+      grossRevenueLoss = grossRevenueLoss.plus(grossRevenueDelta.abs());
+    } else if (revenueMovement === 'INCREASED') {
+      movementSummary.revenueIncreased += 1;
+      grossRevenueGain = grossRevenueGain.plus(grossRevenueDelta);
+    }
 
     return {
       ...item,
@@ -414,19 +471,72 @@ export function compareMlbSalesAbc(
       rankDelta: previousItem ? previousItem.rank - item.rank : null,
       currentUnits: item.unitsSold,
       previousUnits: previousItem?.unitsSold ?? 0,
+      unitsDelta: item.unitsSold - (previousItem?.unitsSold ?? 0),
       unitsDeltaPercent: deltaPercent(
         new Prisma.Decimal(item.unitsSold),
         previousItem ? new Prisma.Decimal(previousItem.unitsSold) : null,
       ),
       currentGrossRevenue: item.grossRevenue,
       previousGrossRevenue: previousItem?.grossRevenue ?? '0.00',
+      grossRevenueDelta: money(grossRevenueDelta),
       grossRevenueDeltaPercent: deltaPercent(
-        new Prisma.Decimal(item.grossRevenue),
-        previousItem ? new Prisma.Decimal(previousItem.grossRevenue) : null,
+        currentGrossRevenue,
+        previousItem ? previousGrossRevenue : null,
       ),
+      revenueMovement,
+      revenueEnteringWindow: money(
+        window?.revenueEnteringWindow ?? new Prisma.Decimal(0),
+      ),
+      revenueLeavingWindow: money(
+        window?.revenueLeavingWindow ?? new Prisma.Decimal(0),
+      ),
+      unitsEnteringWindow: window?.unitsEnteringWindow ?? 0,
+      unitsLeavingWindow: window?.unitsLeavingWindow ?? 0,
     };
   });
+  movementSummary.grossRevenueLoss = money(grossRevenueLoss);
+  movementSummary.grossRevenueGain = money(grossRevenueGain);
   return { movementSummary, mlbs };
+}
+
+function calculateWindowMovement(
+  enteringItems: MlbSalesAbcSourceItem[],
+  leavingItems: MlbSalesAbcSourceItem[],
+): Map<string, MlbWindowMovement> {
+  const movements = new Map<string, MlbWindowMovement>();
+  const add = (item: MlbSalesAbcSourceItem, side: 'entering' | 'leaving') => {
+    const movement = movements.get(item.externalListingId) ?? {
+      revenueEnteringWindow: new Prisma.Decimal(0),
+      revenueLeavingWindow: new Prisma.Decimal(0),
+      unitsEnteringWindow: 0,
+      unitsLeavingWindow: 0,
+    };
+    const revenue = new Prisma.Decimal(item.unitPrice.toString()).mul(
+      item.quantity,
+    );
+    if (side === 'entering') {
+      movement.revenueEnteringWindow =
+        movement.revenueEnteringWindow.plus(revenue);
+      movement.unitsEnteringWindow += item.quantity;
+    } else {
+      movement.revenueLeavingWindow = movement.revenueLeavingWindow.plus(revenue);
+      movement.unitsLeavingWindow += item.quantity;
+    }
+    movements.set(item.externalListingId, movement);
+  };
+  enteringItems.forEach((item) => add(item, 'entering'));
+  leavingItems.forEach((item) => add(item, 'leaving'));
+  return movements;
+}
+
+function revenueMovementFromDelta(
+  delta: Prisma.Decimal,
+  hasPrevious: boolean,
+): MlbRevenueMovement {
+  if (!hasPrevious) return 'NEW';
+  if (delta.gt(0)) return 'INCREASED';
+  if (delta.lt(0)) return 'DECREASED';
+  return 'STABLE';
 }
 
 function movementFromClasses(
