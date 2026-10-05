@@ -340,9 +340,10 @@ async function isRegularFile(path: string): Promise<boolean> {
 }
 
 function statusFor(result: GeFinanceImportResult): AccountStatus {
-  if (result.backfill.failed === 0) {
+  if (result.backfill.failed === 0 && (result.visitsRefresh?.failed ?? 0) === 0) {
     return 'SUCCESS';
   }
+  if (result.backfill.failed === 0) return 'PARTIAL';
   return result.backfill.failed < result.backfill.daysFound
     ? 'PARTIAL'
     : 'FAILED';
@@ -415,6 +416,9 @@ function printOutcome(outcome: AccountOutcome): void {
       `local refresh days: ${backfill?.localRefreshDays ?? 0}`,
       `external processing days: ${backfill?.externalProcessingDays ?? 0}`,
       `current day ignored: ${backfill?.currentDayIgnored ?? 0}`,
+      `visits refresh updated: ${outcome.result?.visitsRefresh?.updated ?? 0}`,
+      `visits refresh unchanged: ${outcome.result?.visitsRefresh?.unchanged ?? 0}`,
+      `visits refresh failed: ${outcome.result?.visitsRefresh?.failed ?? 0}`,
       ...(outcome.error ? [`erro: ${outcome.error}`] : []),
       '',
     ].join('\n')}\n`,

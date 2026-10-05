@@ -282,8 +282,8 @@ export class SellerMetricsReconciliationService {
           ? countCandidate(
               'MERCADO_LIVRE_OFFICIAL',
               visits.value!,
-              'ML official user visits for the requested day',
-              'Consulta ao endpoint oficial de visitas.',
+              'ML official user visits for the requested calendar date',
+              'Consulta diária oficial com date_from=date_to=businessDate (intervalo inclusivo).',
             )
           : unavailableCandidate(
               'MERCADO_LIVRE_OFFICIAL',
@@ -715,7 +715,7 @@ async function loadVisits(
     const result = await client.getUserVisits(
       inspection.accounts.correlation.marketplaceAccount.sellerId,
       date,
-      nextCalendarDate(date),
+      date,
       { id: inspection.accounts.correlation.marketplaceAccount.id },
     );
     return { value: result.total_visits, error: null };
@@ -737,13 +737,6 @@ async function loadVisits(
     }
     throw error;
   }
-}
-
-function nextCalendarDate(value: string): string {
-  const [year, month, day] = value.split('-').map(Number);
-  return new Date(Date.UTC(year!, month! - 1, day! + 1))
-    .toISOString()
-    .slice(0, 10);
 }
 
 function serializeRate(value: Prisma.Decimal | null): string | null {

@@ -192,6 +192,61 @@ describe('GeFinanceImportService', () => {
     });
   });
 
+  it('refreshes recent closed Visits even when the GeFinance day is SKIPPED', async () => {
+    const backfill = new BackfillFake();
+    const calls: unknown[] = [];
+    const visitsRefresh = {
+      refreshRecentClosed: async (params: unknown) => {
+        calls.push(params);
+        return {
+          marketplaceAccountId: 'ml-2',
+          marketplaceAccountName: 'ALE_IMPORTS 2',
+          from: '2026-09-16',
+          to: '2026-09-22',
+          apply: true,
+          days: [],
+          updated: 0,
+          unchanged: 7,
+          failed: 0,
+        };
+      },
+    };
+    const service = new GeFinanceImportService(
+      database(
+        [{ id: 'ml-2', name: 'ALE_IMPORTS 2' }],
+        [{ id: 'olist-2', name: 'Ale Imports', integrationKey: 'c2' }],
+      ) as never,
+      backfill as never,
+      () => ({ getFinancialEvidence: async () => ({ records: [] }) }) as never,
+      visitsRefresh as never,
+    );
+    const skippedPlan = {
+      ...PLAN,
+      skipped: 1,
+      externalProcessingDays: 0,
+      days: [{ ...PLAN.days[0]!, action: 'SKIPPED' as const }],
+    };
+
+    const result = await service.executePrepared({
+      file: '/reports/gefinance.xlsx',
+      sha256: SHA256,
+      report: INSPECTION,
+      marketplaceAccount: { id: 'ml-2', name: 'ALE_IMPORTS 2' },
+      olistAccount: { id: 'olist-2', name: 'Ale Imports', integrationKey: 'c2' },
+      plan: skippedPlan,
+      provider: { getFinancialEvidence: async () => ({ records: [] }) } as never,
+    });
+
+    assert.equal(result.visitsRefresh?.unchanged, 7);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      marketplaceAccountId: 'ml-2',
+      currentDate: (calls[0] as { currentDate: string }).currentDate,
+      limit: 7,
+      excludeDates: [],
+    });
+  });
+
   it('fails instead of guessing when the marketplace account is ambiguous', async () => {
     const service = createService(
       [

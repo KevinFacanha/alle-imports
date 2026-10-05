@@ -238,7 +238,7 @@ function reconciliation(): SellerMetricsReconciliationResult {
       row('grossSales', 'OLIST_TINY_V3', '98.00', 'SUM(Olist valorTotalProdutos / totalProdutos)', 'DIFFERENT'),
       row('grossSales', 'GEFINANCE_XLSX', '151.00', 'SUM(GeFinance Valor do produto vendido)', 'DIFFERENT'),
       row('marginRate', 'GEFINANCE_XLSX', '15.9668874172', 'SUM(Margem) / SUM(Total prod. vendidos)', 'EXACT'),
-      row('visits', 'MERCADO_LIVRE_OFFICIAL', null, 'ML official user visits for the requested day', 'UNAVAILABLE'),
+      row('visits', 'MERCADO_LIVRE_OFFICIAL', null, 'ML official user visits for the requested calendar date', 'UNAVAILABLE'),
     ],
     full: {
       primaryClassification: 'ML shipment.logistic_type = fulfillment',

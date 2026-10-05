@@ -163,13 +163,13 @@ const POLICY: Readonly<
   },
   visits: {
     primarySource: 'MERCADO_LIVRE',
-    primarySemantic: 'ML official user visits for the requested day',
+    primarySemantic: 'ML official user visits for the requested calendar date',
     resolvedStatus: 'AVAILABLE',
     confidence: 'HIGH',
     evidence: [
       {
         source: 'MERCADO_LIVRE',
-        semantic: 'ML official user visits for the requested day',
+        semantic: 'ML official user visits for the requested calendar date',
       },
     ],
     notes: ['HTTP 401/403 permanece indisponível como ACCESS_DENIED.'],
@@ -192,6 +192,7 @@ const POLICY: Readonly<
     formula: 'salesCount / visits * 100',
     notes: [
       'Percentual derivado de Quantidade de vendas (salesCount), nunca de Unidades vendidas.',
+      'Taxa de conversão ML: quantidade de vendas / visitas oficiais do Mercado Livre.',
       'Sem visitas disponíveis ou com visitas iguais a zero, a conversão permanece indisponível.',
     ],
   },

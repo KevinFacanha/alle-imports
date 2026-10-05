@@ -72,6 +72,12 @@ describe('SellerMetricsReconciliationService', () => {
     assert.equal(metric(report.general, 'grossSales', 'OLIST_TINY_V3').absoluteDifference, '2');
     assert.equal(metric(report.general, 'grossSales', 'GEFINANCE_XLSX').value, '151.00');
     assert.equal(metric(report.general, 'visits', 'MERCADO_LIVRE_OFFICIAL').value, 1739);
+    assert.deepEqual(visits.calls, [[
+      '1196767962',
+      DATE,
+      DATE,
+      { id: MARKETPLACE_ACCOUNT_ID },
+    ]]);
 
     assert.equal(report.geFinanceMargin.generalAmount, '24.11');
     assert.equal(report.geFinanceMargin.generalBaseAmount, '151');
@@ -175,9 +181,12 @@ class InspectionFake {
 }
 
 class VisitsClientFake {
+  readonly calls: unknown[][] = [];
+
   constructor(private readonly result: number | Error) {}
 
-  async getUserVisits() {
+  async getUserVisits(...args: unknown[]) {
+    this.calls.push(args);
     if (this.result instanceof Error) {
       throw this.result;
     }

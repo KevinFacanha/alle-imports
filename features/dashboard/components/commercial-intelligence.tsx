@@ -32,7 +32,7 @@ const generalMetrics = [
   { name: "marginRate", label: "Margem de contribuição", format: "percentage", icon: ChartNoAxesCombined },
   { name: "averageTicket", label: "Ticket médio", format: "currency", icon: ReceiptText },
   { name: "visits", label: "Visitas", format: "integer", icon: Eye },
-  { name: "conversionRate", label: "Taxa de conversão", format: "percentage", icon: Percent },
+  { name: "conversionRate", label: "Taxa de conversão ML", format: "percentage", icon: Percent },
 ] as const
 
 const fullMetrics = [

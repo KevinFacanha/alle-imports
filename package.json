@@ -22,6 +22,7 @@
     "reconcile:ml:metrics": "npm run reconcile:ml:metrics --workspace=@ale-intelligence/api --",
     "reconcile:seller-metrics": "npm run reconcile:seller-metrics --workspace=@ale-intelligence/api --",
     "persist:seller-metrics": "npm run persist:seller-metrics --workspace=@ale-intelligence/api --",
+    "repair:seller-bi:visits": "npm run repair:seller-bi:visits --workspace=@ale-intelligence/api --",
     "backfill:seller-metrics": "npm run backfill:seller-metrics --workspace=@ale-intelligence/api --",
     "backfill:gefinance:daily-hashes": "npm run backfill:gefinance:daily-hashes --workspace=@ale-intelligence/api --",
     "backfill:gefinance:margin-components": "npm run backfill:gefinance:margin-components --workspace=@ale-intelligence/api",

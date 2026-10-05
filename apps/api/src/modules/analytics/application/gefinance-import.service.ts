@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Marketplace } from '@prisma/client';
 
 import { DatabaseService } from '../../../database/database.service.js';
@@ -13,12 +13,17 @@ import {
   DailySellerMetricsBackfillProgress,
   DailySellerMetricsBackfillService,
   DailySellerMetricsBackfillSummary,
+  saoPauloBusinessDate,
 } from './daily-seller-metrics-backfill.service.js';
 import { GeFinanceDailyHashBackfillSummary } from './daily-seller-metrics-persistence.service.js';
 import {
   GEFINANCE_PROVIDER_FACTORY,
   GeFinanceProviderFactory,
 } from './seller-metrics-reconciliation.service.js';
+import {
+  SellerBiVisitsRefreshService,
+  SellerBiVisitsRefreshSummary,
+} from './seller-bi-visits-refresh.service.js';
 
 const CHANNEL_ACCOUNT_ORDINALS: Partial<
   Record<FinancialChannelCode, number>
@@ -34,6 +39,7 @@ export interface GeFinanceImportResult {
   marketplaceAccount: { id: string; name: string };
   olistAccount: { id: string; name: string; integrationKey: string };
   backfill: DailySellerMetricsBackfillSummary;
+  visitsRefresh: SellerBiVisitsRefreshSummary | null;
 }
 
 export interface GeFinanceImportPreflight {
@@ -67,6 +73,8 @@ export class GeFinanceImportService {
     private readonly backfill: DailySellerMetricsBackfillService,
     @Inject(GEFINANCE_PROVIDER_FACTORY)
     private readonly geFinanceProviderFactory: GeFinanceProviderFactory,
+    @Optional()
+    private readonly visitsRefresh?: SellerBiVisitsRefreshService,
   ) {}
 
   async backfillDailyHashes(params: {
@@ -160,12 +168,24 @@ export class GeFinanceImportService {
       plan: preflight.plan,
       ...(onProgress ? { onProgress } : {}),
     });
+    const externallyProcessedDates = preflight.plan.days
+      .filter(({ action }) => action === 'FULL_EXTERNAL_PROCESS')
+      .map(({ date }) => date);
+    const visitsRefresh = this.visitsRefresh
+      ? await this.visitsRefresh.refreshRecentClosed({
+          marketplaceAccountId: preflight.marketplaceAccount.id,
+          currentDate: saoPauloBusinessDate(),
+          limit: 7,
+          excludeDates: externallyProcessedDates,
+        })
+      : null;
 
     return {
       report: preflight.report,
       marketplaceAccount: preflight.marketplaceAccount,
       olistAccount: preflight.olistAccount,
       backfill,
+      visitsRefresh,
     };
   }
 
