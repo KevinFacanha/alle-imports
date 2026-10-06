@@ -71,6 +71,19 @@ enum DailySellerMetricConfidence {
   LOW
 }
 
+enum OfferCompositionSource {
+  MANUAL
+  CATALOG
+  MARKETPLACE
+  INFERRED
+}
+
+enum ListingEquivalenceStatus {
+  CANDIDATE
+  CONFIRMED
+  REJECTED
+}
+
 model Product {
   id                 String                    @id @default(uuid()) @db.Uuid
   sku                String                    @unique(map: "products_sku_key")
@@ -81,40 +94,41 @@ model Product {
   externalIdentities ProductExternalIdentity[]
   listingItems       MarketplaceListingItem[]
   orderItems         MarketplaceOrderItem[]
+  offerCompositions  OfferComposition[]
 
   @@map("products")
 }
 
 model BusinessAccount {
-  id                        String                    @id @default(uuid()) @db.Uuid
-  code                      String                    @unique(map: "business_accounts_code_key")
-  displayName               String                    @map("display_name")
-  active                    Boolean                   @default(true)
-  createdAt                 DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                 DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  marketplaceAccounts       MarketplaceAccount[]
-  olistAccounts             OlistAccount[]
-  productExternalIdentities ProductExternalIdentity[]
+  id                           String                        @id @default(uuid()) @db.Uuid
+  code                         String                        @unique(map: "business_accounts_code_key")
+  displayName                  String                        @map("display_name")
+  active                       Boolean                       @default(true)
+  createdAt                    DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceAccounts          MarketplaceAccount[]
+  olistAccounts                OlistAccount[]
+  productExternalIdentities    ProductExternalIdentity[]
   marketplaceOrderBackfillRuns MarketplaceOrderBackfillRun[]
 
   @@map("business_accounts")
 }
 
 model MarketplaceAccount {
-  id                 String                    @id @default(uuid()) @db.Uuid
-  businessAccountId  String?                   @map("business_account_id") @db.Uuid
+  id                 String                        @id @default(uuid()) @db.Uuid
+  businessAccountId  String?                       @map("business_account_id") @db.Uuid
   marketplace        Marketplace
-  externalAccountId  String                    @map("external_account_id")
+  externalAccountId  String                        @map("external_account_id")
   name               String
-  active             Boolean                   @default(true)
-  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  active             Boolean                       @default(true)
+  createdAt          DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
   authorization      MarketplaceAuthorization?
   listings           MarketplaceListing[]
   orders             MarketplaceOrder[]
   dailySellerMetrics DailySellerMetrics[]
   orderBackfillRuns  MarketplaceOrderBackfillRun[]
-  businessAccount    BusinessAccount?          @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_accounts_business_account_id_fkey")
+  businessAccount    BusinessAccount?              @relation(fields: [businessAccountId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_accounts_business_account_id_fkey")
 
   @@unique([marketplace, externalAccountId], map: "marketplace_accounts_marketplace_external_account_id_key")
   @@index([businessAccountId], map: "marketplace_accounts_business_account_id_idx")
@@ -218,25 +232,77 @@ model MarketplaceListing {
 }
 
 model MarketplaceListingItem {
-  id                   String                    @id @default(uuid()) @db.Uuid
-  marketplaceListingId String                    @map("marketplace_listing_id") @db.Uuid
-  productId            String?                   @map("product_id") @db.Uuid
-  externalSellableId   String                    @map("external_sellable_id")
-  sellerSku            String?                   @map("seller_sku")
-  variationLabel       String?                   @map("variation_label")
-  active               Boolean                   @default(true)
-  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  marketplaceListing   MarketplaceListing        @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
-  product              Product?                  @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
-  orderItems           MarketplaceOrderItem[]
-  externalIdentities   ProductExternalIdentity[]
+  id                       String                    @id @default(uuid()) @db.Uuid
+  marketplaceListingId     String                    @map("marketplace_listing_id") @db.Uuid
+  productId                String?                   @map("product_id") @db.Uuid
+  externalSellableId       String                    @map("external_sellable_id")
+  sellerSku                String?                   @map("seller_sku")
+  variationLabel           String?                   @map("variation_label")
+  active                   Boolean                   @default(true)
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceListing       MarketplaceListing        @relation(fields: [marketplaceListingId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_listing_items_marketplace_listing_id_fkey")
+  product                  Product?                  @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "marketplace_listing_items_product_id_fkey")
+  orderItems               MarketplaceOrderItem[]
+  externalIdentities       ProductExternalIdentity[]
+  offerCompositions        OfferComposition[]
+  leftListingEquivalences  ListingEquivalence[]      @relation("ListingEquivalenceLeft")
+  rightListingEquivalences ListingEquivalence[]      @relation("ListingEquivalenceRight")
 
   @@unique([marketplaceListingId, externalSellableId], map: "marketplace_listing_items_listing_external_sellable_id_key")
   @@index([marketplaceListingId], map: "marketplace_listing_items_marketplace_listing_id_idx")
   @@index([productId], map: "marketplace_listing_items_product_id_idx")
   @@index([sellerSku], map: "marketplace_listing_items_seller_sku_idx")
   @@map("marketplace_listing_items")
+}
+
+model OfferComposition {
+  id                       String                 @id @default(uuid()) @db.Uuid
+  marketplaceListingItemId String                 @map("marketplace_listing_item_id") @db.Uuid
+  componentProductId       String                 @map("component_product_id") @db.Uuid
+  quantity                 Decimal                @db.Decimal(30, 10)
+  source                   OfferCompositionSource
+  confidence               Decimal                @db.Decimal(5, 4)
+  evidenceVersion          String                 @map("evidence_version")
+  evidenceHash             String                 @map("evidence_hash") @db.Char(64)
+  /// Sanitized evidence only; credentials, tokens, and raw sensitive payloads are forbidden.
+  evidence                 Json?                  @db.JsonB
+  validFrom                DateTime               @default(now()) @map("valid_from") @db.Timestamptz(3)
+  validTo                  DateTime?              @map("valid_to") @db.Timestamptz(3)
+  createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  marketplaceListingItem   MarketplaceListingItem @relation(fields: [marketplaceListingItemId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "offer_compositions_marketplace_listing_item_id_fkey")
+  componentProduct         Product                @relation(fields: [componentProductId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "offer_compositions_component_product_id_fkey")
+
+  @@index([marketplaceListingItemId, validTo], map: "offer_compositions_listing_item_valid_to_idx")
+  @@index([componentProductId, validTo], map: "offer_compositions_component_product_valid_to_idx")
+  @@index([evidenceHash], map: "offer_compositions_evidence_hash_idx")
+  @@map("offer_compositions")
+}
+
+model ListingEquivalence {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  leftListingItemId  String                   @map("left_listing_item_id") @db.Uuid
+  rightListingItemId String                   @map("right_listing_item_id") @db.Uuid
+  componentSignature String                   @map("component_signature") @db.Char(64)
+  status             ListingEquivalenceStatus
+  confidence         Decimal                  @db.Decimal(5, 4)
+  matchingVersion    String                   @map("matching_version")
+  evidenceHash       String                   @map("evidence_hash") @db.Char(64)
+  /// Sanitized evidence only; credentials, tokens, and raw sensitive payloads are forbidden.
+  evidence           Json?                    @db.JsonB
+  validFrom          DateTime                 @default(now()) @map("valid_from") @db.Timestamptz(3)
+  validTo            DateTime?                @map("valid_to") @db.Timestamptz(3)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  leftListingItem    MarketplaceListingItem   @relation("ListingEquivalenceLeft", fields: [leftListingItemId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "listing_equivalences_left_listing_item_id_fkey")
+  rightListingItem   MarketplaceListingItem   @relation("ListingEquivalenceRight", fields: [rightListingItemId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "listing_equivalences_right_listing_item_id_fkey")
+
+  @@index([leftListingItemId, validTo], map: "listing_equivalences_left_valid_to_idx")
+  @@index([rightListingItemId, validTo], map: "listing_equivalences_right_valid_to_idx")
+  @@index([componentSignature, status, validTo], map: "listing_equivalences_signature_status_valid_to_idx")
+  @@index([evidenceHash], map: "listing_equivalences_evidence_hash_idx")
+  @@map("listing_equivalences")
 }
 
 model ProductExternalIdentity {
@@ -329,7 +395,7 @@ model MarketplaceOrderBackfillRun {
   chunkDays            Int                             @default(1) @map("chunk_days")
   maxRps               Decimal                         @default(1) @map("max_rps") @db.Decimal(10, 3)
   maxAttempts          Int                             @default(5) @map("max_attempts")
-  status               MarketplaceOrderBackfillStatus @default(PENDING)
+  status               MarketplaceOrderBackfillStatus  @default(PENDING)
   totalChunks          Int                             @map("total_chunks")
   completedChunks      Int                             @default(0) @map("completed_chunks")
   failedChunks         Int                             @default(0) @map("failed_chunks")
@@ -356,26 +422,26 @@ model MarketplaceOrderBackfillRun {
 }
 
 model MarketplaceOrderBackfillChunk {
-  id              String                          @id @default(uuid()) @db.Uuid
-  runId           String                          @map("run_id") @db.Uuid
-  dateFrom        DateTime                        @map("date_from") @db.Timestamptz(3)
-  dateTo          DateTime                        @map("date_to") @db.Timestamptz(3)
-  status          MarketplaceOrderBackfillStatus  @default(PENDING)
-  nextOffset      Int                             @default(0) @map("next_offset")
-  totalOrders     Int?                            @map("total_orders")
-  attempts        Int                             @default(0)
-  pagesProcessed  Int                             @default(0) @map("pages_processed")
-  ordersProcessed Int                             @default(0) @map("orders_processed")
-  itemsMapped     Int                             @default(0) @map("items_mapped")
-  itemsUnmapped   Int                             @default(0) @map("items_unmapped")
-  partial         Boolean                         @default(false)
-  lastError       String?                         @map("last_error")
-  startedAt       DateTime?                       @map("started_at") @db.Timestamptz(3)
-  completedAt     DateTime?                       @map("completed_at") @db.Timestamptz(3)
-  failedAt        DateTime?                       @map("failed_at") @db.Timestamptz(3)
-  createdAt       DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
-  run             MarketplaceOrderBackfillRun     @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_order_backfill_chunks_run_id_fkey")
+  id              String                         @id @default(uuid()) @db.Uuid
+  runId           String                         @map("run_id") @db.Uuid
+  dateFrom        DateTime                       @map("date_from") @db.Timestamptz(3)
+  dateTo          DateTime                       @map("date_to") @db.Timestamptz(3)
+  status          MarketplaceOrderBackfillStatus @default(PENDING)
+  nextOffset      Int                            @default(0) @map("next_offset")
+  totalOrders     Int?                           @map("total_orders")
+  attempts        Int                            @default(0)
+  pagesProcessed  Int                            @default(0) @map("pages_processed")
+  ordersProcessed Int                            @default(0) @map("orders_processed")
+  itemsMapped     Int                            @default(0) @map("items_mapped")
+  itemsUnmapped   Int                            @default(0) @map("items_unmapped")
+  partial         Boolean                        @default(false)
+  lastError       String?                        @map("last_error")
+  startedAt       DateTime?                      @map("started_at") @db.Timestamptz(3)
+  completedAt     DateTime?                      @map("completed_at") @db.Timestamptz(3)
+  failedAt        DateTime?                      @map("failed_at") @db.Timestamptz(3)
+  createdAt       DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(3)
+  run             MarketplaceOrderBackfillRun    @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "marketplace_order_backfill_chunks_run_id_fkey")
 
   @@unique([runId, dateFrom], map: "marketplace_order_backfill_chunks_run_date_from_key")
   @@index([runId, status], map: "marketplace_order_backfill_chunks_run_status_idx")
