@@ -131,12 +131,16 @@ export class OlistOAuthService {
       throw this.handleExternalError(error, 'account_info');
     }
 
-    const now = Date.now();
-    const expiresAt = new Date(now + tokens.expiresIn * 1_000);
+    const authorizedAt = new Date();
+    const expiresAt = new Date(
+      authorizedAt.getTime() + tokens.expiresIn * 1_000,
+    );
     const refreshExpiresAt =
       tokens.refreshExpiresIn === null
         ? null
-        : new Date(now + tokens.refreshExpiresIn * 1_000);
+        : new Date(
+            authorizedAt.getTime() + tokens.refreshExpiresIn * 1_000,
+          );
 
     let accessTokenEncrypted: string;
     let refreshTokenEncrypted: string;
@@ -206,6 +210,10 @@ export class OlistOAuthService {
           scope: tokens.scope,
           expiresAt,
           refreshExpiresAt,
+          status: 'ACTIVE' as const,
+          statusReason: null,
+          lastRefreshAttemptAt: authorizedAt,
+          lastRefreshSuccessAt: authorizedAt,
         };
         if (authorizationForIntegration === null) {
           await transaction.olistAuthorization.create({

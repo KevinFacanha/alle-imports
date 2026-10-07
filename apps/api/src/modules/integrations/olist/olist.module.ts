@@ -11,6 +11,7 @@ import {
 } from './olist-oauth.client.js';
 import { OlistOAuthController } from './olist-oauth.controller.js';
 import { OlistOAuthService } from './olist-oauth.service.js';
+import { OlistTokenKeeperScheduler } from './olist-token-keeper.scheduler.js';
 import {
   OLIST_ORDERS_FETCH,
   OLIST_ORDERS_REQUEST_INTERVAL_MS,
@@ -27,6 +28,7 @@ import { OlistOrdersInspectionService } from './olist-orders-inspection.service.
     OlistIntegrationConfigService,
     OlistOAuthService,
     OlistAuthorizationService,
+    OlistTokenKeeperScheduler,
     OlistOrdersClient,
     OlistOrdersInspectionService,
     {

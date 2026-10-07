@@ -279,6 +279,57 @@ describe('Olist OAuth flow', () => {
     assert.equal(authorization.scope, 'openid');
     assert.ok(authorization.expiresAt.getTime() > Date.now());
     assert.ok(authorization.refreshExpiresAt?.getTime());
+    const restored = database.authorizations[0];
+    assert.ok(restored);
+    assert.equal(restored.status, 'ACTIVE');
+    assert.equal(restored.statusReason, null);
+    assert.ok(restored.lastRefreshAttemptAt);
+    assert.ok(restored.lastRefreshSuccessAt);
+  });
+
+  it('restores ACTIVE status and timestamps after manual reauthorization', async () => {
+    const database = new OlistOAuthDatabaseFake();
+    const first = makeOAuthService(database, [
+      jsonResponse(tokenResponse()),
+      jsonResponse({
+        razaoSocial: 'Ale Comercio Ltda',
+        cpfCnpj: '12.345.678/0001-95',
+      }),
+    ]);
+    await first.service.handleCallback(
+      extractState(first.service.createAuthorizationUrl()),
+      'first-code',
+    );
+    const authorization = database.authorizations[0];
+    assert.ok(authorization);
+    authorization.status = 'REAUTH_REQUIRED';
+    authorization.statusReason = 'invalid_grant';
+    authorization.lastRefreshAttemptAt = null;
+    authorization.lastRefreshSuccessAt = null;
+
+    const reauthorization = makeOAuthService(database, [
+      jsonResponse(
+        tokenResponse({
+          access_token: 'reauthorized-access',
+          refresh_token: 'reauthorized-refresh',
+        }),
+      ),
+      jsonResponse({
+        razaoSocial: 'Ale Comercio Ltda',
+        cpfCnpj: '12.345.678/0001-95',
+      }),
+    ]);
+    await reauthorization.service.handleCallback(
+      extractState(reauthorization.service.createAuthorizationUrl()),
+      'reauthorization-code',
+    );
+
+    const restored = database.authorizations[0];
+    assert.ok(restored);
+    assert.equal(restored.status, 'ACTIVE');
+    assert.equal(restored.statusReason, null);
+    assert.ok(restored.lastRefreshAttemptAt);
+    assert.ok(restored.lastRefreshSuccessAt);
   });
 
   it('rejects an invalid state before making an external request', async () => {
@@ -515,6 +566,10 @@ interface StoredAuthorization {
   scope: string | null;
   expiresAt: Date;
   refreshExpiresAt: Date | null;
+  status: 'ACTIVE' | 'REAUTH_REQUIRED';
+  statusReason: string | null;
+  lastRefreshAttemptAt: Date | null;
+  lastRefreshSuccessAt: Date | null;
 }
 
 class OlistOAuthDatabaseFake {

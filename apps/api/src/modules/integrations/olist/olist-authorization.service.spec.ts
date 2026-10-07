@@ -9,11 +9,9 @@ import {
   OlistIntegrationConfigService,
   OlistIntegrationCredentials,
 } from './olist-integration-config.service.js';
-import {
-  OlistAuthorizationService,
-  OlistReauthorizationRequiredError,
-} from './olist-authorization.service.js';
+import { OlistAuthorizationService } from './olist-authorization.service.js';
 import { OlistOAuthClient } from './olist-oauth.client.js';
+import { OlistOAuthError } from './olist-oauth.types.js';
 
 const ACCOUNT_A_ID = '20000000-0000-4000-8000-000000000001';
 const ACCOUNT_B_ID = '20000000-0000-4000-8000-000000000002';
@@ -21,11 +19,52 @@ const CURRENT_ACCESS_TOKEN = 'olist-current-access';
 const CURRENT_REFRESH_TOKEN = 'olist-current-refresh';
 
 describe('OlistAuthorizationService', () => {
-  it('returns a valid encrypted access token without refreshing', async () => {
+  it('returns SKIPPED outside both refresh margins', async () => {
     const encryption = makeEncryption();
     const database = new AuthorizationDatabaseFake([
       storedAuthorization(encryption, ACCOUNT_A_ID, {
-        expiresAt: new Date(Date.now() + 10 * 60_000),
+        expiresAt: new Date(Date.now() + 11 * 60_000),
+        refreshExpiresAt: new Date(Date.now() + 121 * 60_000),
+      }),
+    ]);
+    const oauth = new OAuthRefreshFake();
+    const service = makeService(database, encryption, oauth);
+
+    const result = await service.refreshIfDue(ACCOUNT_A_ID);
+
+    assert.equal(result.outcome, 'SKIPPED');
+    assert.equal(oauth.refreshCalls.length, 0);
+    assert.equal(
+      await service.getAccessToken({ id: ACCOUNT_A_ID }),
+      CURRENT_ACCESS_TOKEN,
+    );
+  });
+
+  it('refreshes preventively when the refresh token has at most two hours left', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID, {
+        expiresAt: new Date(Date.now() + 60 * 60_000),
+        refreshExpiresAt: new Date(Date.now() + 90 * 60_000),
+      }),
+    ]);
+    const oauth = new OAuthRefreshFake();
+
+    const result = await makeService(
+      database,
+      encryption,
+      oauth,
+    ).refreshIfDue(ACCOUNT_A_ID);
+
+    assert.equal(result.outcome, 'REFRESHED');
+    assert.deepEqual(oauth.refreshCalls, [CURRENT_REFRESH_TOKEN]);
+  });
+
+  it('rotates access and refresh tokens and records successful timestamps', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID, {
+        expiresAt: new Date(Date.now() + 9 * 60_000),
       }),
     ]);
     const oauth = new OAuthRefreshFake();
@@ -33,43 +72,22 @@ describe('OlistAuthorizationService', () => {
 
     assert.equal(
       await service.getAccessToken({ id: ACCOUNT_A_ID }),
-      CURRENT_ACCESS_TOKEN,
-    );
-    assert.equal(oauth.refreshCalls.length, 0);
-  });
-
-  it('refreshes once, persists rotation and coalesces concurrent calls', async () => {
-    const encryption = makeEncryption();
-    const database = new AuthorizationDatabaseFake([
-      storedAuthorization(encryption, ACCOUNT_A_ID),
-    ]);
-    const oauth = new OAuthRefreshFake();
-    const service = makeService(database, encryption, oauth);
-
-    const [first, second] = await Promise.all([
-      service.getAccessToken({ id: ACCOUNT_A_ID }),
-      service.getAccessToken({ id: ACCOUNT_A_ID }),
-    ]);
-
-    assert.equal(first, 'new-access-1');
-    assert.equal(second, 'new-access-1');
-    assert.deepEqual(oauth.refreshCalls, [CURRENT_REFRESH_TOKEN]);
-    const stored = database.get(ACCOUNT_A_ID);
-    assert.equal(
-      encryption.decrypt(stored.accessTokenEncrypted),
       'new-access-1',
     );
+
+    const stored = database.get(ACCOUNT_A_ID);
+    assert.equal(encryption.decrypt(stored.accessTokenEncrypted), 'new-access-1');
     assert.equal(
       encryption.decrypt(stored.refreshTokenEncrypted),
       'new-refresh-1',
     );
-    assert.equal(stored.tokenType, 'Bearer');
-    assert.equal(stored.scope, 'openid');
-    assert.ok(stored.expiresAt.getTime() > Date.now());
-    assert.ok(stored.refreshExpiresAt?.getTime());
+    assert.equal(stored.status, 'ACTIVE');
+    assert.equal(stored.statusReason, null);
+    assert.ok(stored.lastRefreshAttemptAt);
+    assert.ok(stored.lastRefreshSuccessAt);
   });
 
-  it('refreshes separate accounts independently', async () => {
+  it('keeps C1 and C2 refreshes independent', async () => {
     const encryption = makeEncryption();
     const database = new AuthorizationDatabaseFake([
       storedAuthorization(encryption, ACCOUNT_A_ID, {
@@ -84,24 +102,58 @@ describe('OlistAuthorizationService', () => {
     const oauth = new OAuthRefreshFake();
     const service = makeService(database, encryption, oauth);
 
-    const [accessA, accessB] = await Promise.all([
-      service.getAccessToken({ id: ACCOUNT_A_ID }),
-      service.getAccessToken({ id: ACCOUNT_B_ID }),
+    const [resultA, resultB] = await Promise.all([
+      service.refreshIfDue(ACCOUNT_A_ID),
+      service.refreshIfDue(ACCOUNT_B_ID),
     ]);
 
-    assert.deepEqual([accessA, accessB].sort(), [
-      'new-access-1',
-      'new-access-2',
-    ]);
+    assert.equal(resultA.outcome, 'REFRESHED');
+    assert.equal(resultB.outcome, 'REFRESHED');
     assert.deepEqual(oauth.refreshCalls.sort(), ['refresh-a', 'refresh-b']);
     assert.deepEqual(oauth.integrationKeys.sort(), ['c1', 'c2']);
-    assert.notEqual(
-      database.get(ACCOUNT_A_ID).accessTokenEncrypted,
-      database.get(ACCOUNT_B_ID).accessTokenEncrypted,
-    );
   });
 
-  it('requires reauthorization when the refresh token has expired', async () => {
+  it('coalesces concurrent refreshes in the same process', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID),
+    ]);
+    const oauth = new OAuthRefreshFake();
+    const service = makeService(database, encryption, oauth);
+
+    const [first, second] = await Promise.all([
+      service.refreshIfDue(ACCOUNT_A_ID),
+      service.refreshIfDue(ACCOUNT_A_ID),
+    ]);
+
+    assert.equal(first.outcome, 'REFRESHED');
+    assert.equal(second.outcome, 'REFRESHED');
+    assert.equal(oauth.refreshCalls.length, 1);
+  });
+
+  it('serializes two processes and rereads after the advisory lock', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID),
+    ]);
+    const oauth = new OAuthRefreshFake();
+    const firstProcess = makeService(database, encryption, oauth);
+    const secondProcess = makeService(database, encryption, oauth);
+
+    const [first, second] = await Promise.all([
+      firstProcess.refreshIfDue(ACCOUNT_A_ID),
+      secondProcess.refreshIfDue(ACCOUNT_A_ID),
+    ]);
+
+    assert.deepEqual(
+      [first.outcome, second.outcome].sort(),
+      ['REFRESHED', 'SKIPPED'],
+    );
+    assert.equal(oauth.refreshCalls.length, 1);
+    assert.equal(database.lockCalls, 2);
+  });
+
+  it('marks an expired refresh token without making an HTTP request', async () => {
     const encryption = makeEncryption();
     const database = new AuthorizationDatabaseFake([
       storedAuthorization(encryption, ACCOUNT_A_ID, {
@@ -109,15 +161,142 @@ describe('OlistAuthorizationService', () => {
       }),
     ]);
     const oauth = new OAuthRefreshFake();
+
+    const result = await makeService(
+      database,
+      encryption,
+      oauth,
+    ).refreshIfDue(ACCOUNT_A_ID);
+
+    assert.equal(result.outcome, 'REAUTH_REQUIRED');
+    assert.equal(oauth.refreshCalls.length, 0);
+    assert.equal(database.get(ACCOUNT_A_ID).status, 'REAUTH_REQUIRED');
+    assert.equal(
+      database.get(ACCOUNT_A_ID).statusReason,
+      'refresh_token_expired',
+    );
+  });
+
+  it('marks invalid_grant as REAUTH_REQUIRED and does not loop', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID),
+    ]);
+    const oauth = new OAuthRefreshFake([
+      new OlistOAuthError(
+        'INVALID_GRANT',
+        'sensitive upstream response',
+        'token_refresh',
+        400,
+      ),
+    ]);
     const service = makeService(database, encryption, oauth);
 
-    await assert.rejects(
-      service.getAccessToken({ id: ACCOUNT_A_ID }),
-      OlistReauthorizationRequiredError,
-    );
-    assert.equal(oauth.refreshCalls.length, 0);
+    const first = await service.refreshIfDue(ACCOUNT_A_ID);
+    const second = await service.refreshIfDue(ACCOUNT_A_ID);
+
+    assert.equal(first.outcome, 'REAUTH_REQUIRED');
+    assert.equal(second.outcome, 'REAUTH_REQUIRED');
+    assert.equal(oauth.refreshCalls.length, 1);
+    assert.equal(database.get(ACCOUNT_A_ID).statusReason, 'invalid_grant');
+  });
+
+  it('returns RETRY for timeout without requiring reauthorization', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID),
+    ]);
+    const oauth = new OAuthRefreshFake([
+      new OlistOAuthError(
+        'TIMEOUT',
+        'request timed out',
+        'token_refresh',
+        null,
+      ),
+    ]);
+
+    const result = await makeService(
+      database,
+      encryption,
+      oauth,
+    ).refreshIfDue(ACCOUNT_A_ID);
+
+    assert.equal(result.outcome, 'RETRY');
+    assert.equal(result.error, 'timeout');
+    assert.equal(database.get(ACCOUNT_A_ID).status, 'ACTIVE');
+    assert.ok(database.get(ACCOUNT_A_ID).lastRefreshAttemptAt);
+    assert.equal(database.get(ACCOUNT_A_ID).lastRefreshSuccessAt, null);
+  });
+
+  it('retries only connection, 429 and 5xx failures', async () => {
+    const cases: Array<{
+      externalStatus: number | null;
+      expectedOutcome: 'RETRY' | 'SKIPPED';
+    }> = [
+      { externalStatus: null, expectedOutcome: 'RETRY' },
+      { externalStatus: 429, expectedOutcome: 'RETRY' },
+      { externalStatus: 503, expectedOutcome: 'RETRY' },
+      { externalStatus: 400, expectedOutcome: 'SKIPPED' },
+      { externalStatus: 403, expectedOutcome: 'SKIPPED' },
+    ];
+
+    for (const { externalStatus, expectedOutcome } of cases) {
+      const encryption = makeEncryption();
+      const database = new AuthorizationDatabaseFake([
+        storedAuthorization(encryption, ACCOUNT_A_ID),
+      ]);
+      const oauth = new OAuthRefreshFake([
+        new OlistOAuthError(
+          'REQUEST_FAILED',
+          'sanitized by the service',
+          'token_refresh',
+          externalStatus,
+        ),
+      ]);
+
+      const result = await makeService(
+        database,
+        encryption,
+        oauth,
+      ).refreshIfDue(ACCOUNT_A_ID);
+
+      assert.equal(result.outcome, expectedOutcome);
+      assert.equal(database.get(ACCOUNT_A_ID).status, 'ACTIVE');
+    }
+  });
+
+  it('never includes tokens, client secret or OAuth response details in logs', async () => {
+    const encryption = makeEncryption();
+    const database = new AuthorizationDatabaseFake([
+      storedAuthorization(encryption, ACCOUNT_A_ID),
+    ]);
+    const oauth = new OAuthRefreshFake([
+      new OlistOAuthError(
+        'TIMEOUT',
+        `leaked ${CURRENT_ACCESS_TOKEN} ${CURRENT_REFRESH_TOKEN} c2-client-secret`,
+        'token_refresh',
+        null,
+      ),
+    ]);
+    const service = makeService(database, encryption, oauth);
+    const logs: string[] = [];
+    (
+      service as unknown as { logger: { log: (message: string) => void } }
+    ).logger = { log: (message) => logs.push(message) };
+
+    await service.refreshIfDue(ACCOUNT_A_ID);
+
+    const serialized = logs.join('\n');
+    assert.equal(serialized.includes(CURRENT_ACCESS_TOKEN), false);
+    assert.equal(serialized.includes(CURRENT_REFRESH_TOKEN), false);
+    assert.equal(serialized.includes('c2-client-secret'), false);
+    assert.equal(serialized.includes('leaked'), false);
+    assert.equal(serialized.includes('"integrationKey":"c2"'), true);
+    assert.equal(serialized.includes('"result":"RETRY"'), true);
   });
 });
+
+type AuthorizationStatus = 'ACTIVE' | 'REAUTH_REQUIRED';
 
 interface StoredAuthorization {
   integrationKey: string;
@@ -128,49 +307,69 @@ interface StoredAuthorization {
   scope: string | null;
   expiresAt: Date;
   refreshExpiresAt: Date | null;
+  status: AuthorizationStatus;
+  statusReason: string | null;
+  lastRefreshAttemptAt: Date | null;
+  lastRefreshSuccessAt: Date | null;
 }
 
 class AuthorizationDatabaseFake {
+  private transactionTail = Promise.resolve();
+  lockCalls = 0;
+
   constructor(private readonly authorizations: StoredAuthorization[]) {}
+
+  readonly olistAuthorization = {
+    findUnique: async (args: {
+      where: { olistAccountId: string };
+    }): Promise<StoredAuthorization | null> => this.find(args.where.olistAccountId),
+  };
 
   readonly $transaction = async <T>(
     operation: (transaction: unknown) => Promise<T>,
-  ): Promise<T> => operation(this.transactionClient());
+  ): Promise<T> => {
+    const previous = this.transactionTail;
+    let release = (): void => undefined;
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation(this.transactionClient());
+    } finally {
+      release();
+    }
+  };
 
   get(olistAccountId: string): StoredAuthorization {
-    const authorization = this.authorizations.find(
-      (candidate) => candidate.olistAccountId === olistAccountId,
-    );
+    const authorization = this.find(olistAccountId);
     assert.ok(authorization);
     return authorization;
   }
 
+  private find(olistAccountId: string): StoredAuthorization | null {
+    return (
+      this.authorizations.find(
+        (candidate) => candidate.olistAccountId === olistAccountId,
+      ) ?? null
+    );
+  }
+
   private transactionClient(): object {
     return {
-      $executeRaw: async (): Promise<number> => 1,
+      $executeRaw: async (): Promise<number> => {
+        this.lockCalls += 1;
+        return 1;
+      },
       olistAuthorization: {
-        findUnique: async (args: {
-          where: { olistAccountId: string };
-        }): Promise<StoredAuthorization | null> =>
-          this.authorizations.find(
-            (authorization) =>
-              authorization.olistAccountId === args.where.olistAccountId,
-          ) ?? null,
+        findUnique: this.olistAuthorization.findUnique,
         update: async (args: {
           where: { olistAccountId: string };
-          data: Omit<StoredAuthorization, 'olistAccountId' | 'integrationKey'>;
+          data: Partial<StoredAuthorization>;
         }): Promise<StoredAuthorization> => {
-          const index = this.authorizations.findIndex(
-            (authorization) =>
-              authorization.olistAccountId === args.where.olistAccountId,
-          );
-          assert.ok(index >= 0);
-          const updated = {
-            ...this.authorizations[index]!,
-            ...args.data,
-          };
-          this.authorizations[index] = updated;
-          return updated;
+          const authorization = this.get(args.where.olistAccountId);
+          Object.assign(authorization, args.data);
+          return authorization;
         },
       },
     };
@@ -181,14 +380,18 @@ class OAuthRefreshFake {
   readonly refreshCalls: string[] = [];
   readonly integrationKeys: string[] = [];
 
+  constructor(private readonly errors: Error[] = []) {}
+
   async refreshAccessToken(
     credentials: OlistIntegrationCredentials,
     refreshToken: string,
   ) {
     this.integrationKeys.push(credentials.integrationKey);
     this.refreshCalls.push(refreshToken);
-    const suffix = this.refreshCalls.length;
     await Promise.resolve();
+    const error = this.errors.shift();
+    if (error) throw error;
+    const suffix = this.refreshCalls.length;
     return {
       accessToken: `new-access-${suffix}`,
       refreshToken: `new-refresh-${suffix}`,
@@ -240,7 +443,11 @@ function storedAuthorization(
     scope: 'openid',
     expiresAt: overrides.expiresAt ?? new Date(Date.now() - 60_000),
     refreshExpiresAt:
-      overrides.refreshExpiresAt ?? new Date(Date.now() + 60 * 60_000),
+      overrides.refreshExpiresAt ?? new Date(Date.now() + 24 * 60 * 60_000),
+    status: 'ACTIVE',
+    statusReason: null,
+    lastRefreshAttemptAt: null,
+    lastRefreshSuccessAt: null,
   };
 }
 
@@ -264,9 +471,7 @@ function makeConfig(): ConfigService<EnvironmentVariables, true> {
     get: (key: string) => values[key],
     getOrThrow: (key: string) => {
       const value = values[key];
-      if (!value) {
-        throw new Error(`Missing test config: ${key}`);
-      }
+      if (!value) throw new Error(`Missing test config: ${key}`);
       return value;
     },
   } as unknown as ConfigService<EnvironmentVariables, true>;

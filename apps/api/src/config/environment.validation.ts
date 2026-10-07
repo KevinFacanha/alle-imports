@@ -44,6 +44,15 @@ export class EnvironmentVariables {
   @IsBoolean()
   MARKETPLACE_ORDER_SYNC_SCHEDULER_ENABLED = false;
 
+  @Transform(({ value }) => {
+    if (value === undefined) return false;
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  OLIST_TOKEN_KEEPER_ENABLED = false;
+
   @IsString()
   @IsNotEmpty()
   DATABASE_URL!: string;
