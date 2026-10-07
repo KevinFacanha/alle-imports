@@ -12,6 +12,7 @@ import { MlbSalesAbcService } from './application/mlb-sales-abc.service.js';
 import { NoSaleListingsService } from './application/no-sale-listings.service.js';
 import { ProductIntelligenceService } from './application/product-intelligence.service.js';
 import { ProductSalesAbcService } from './application/product-sales-abc.service.js';
+import { X1ProductIntelligenceService } from './application/x1-product-intelligence.service.js';
 import { SellerBiMetricResolver } from './application/seller-bi-metric.resolver.js';
 import { SellerBiVisitsRefreshService } from './application/seller-bi-visits-refresh.service.js';
 import {
@@ -41,6 +42,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     NoSaleListingsService,
     ProductIntelligenceService,
     ProductSalesAbcService,
+    X1ProductIntelligenceService,
     SellerBiMetricResolver,
     SellerBiVisitsRefreshService,
     SellerMetricsReconciliationService,
@@ -59,6 +61,7 @@ import { SellerMetricsController } from './http/seller-metrics.controller.js';
     NoSaleListingsService,
     ProductIntelligenceService,
     ProductSalesAbcService,
+    X1ProductIntelligenceService,
     SellerBiMetricResolver,
     SellerBiVisitsRefreshService,
     SellerMetricsReconciliationService,
