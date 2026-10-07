@@ -20,7 +20,10 @@
     "features/product-intelligence/lib/no-sale-data-coverage.spec.ts",
     "features/product-intelligence/lib/attention-center.ts",
     "features/product-intelligence/lib/attention-center.spec.ts",
+    "features/product-intelligence/lib/x1-product-intelligence.ts",
+    "features/product-intelligence/lib/x1-product-intelligence.spec.ts",
     "types/mlb-sales-abc.ts",
-    "types/no-sale-listings.ts"
+    "types/no-sale-listings.ts",
+    "types/x1-product-intelligence.ts"
   ]
 }
